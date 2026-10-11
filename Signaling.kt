@@ -36,7 +36,7 @@ class Signaling(
 
     fun send(kind: String, payload: String) {
         Thread {
-            val id = Crypto.newCode()
+            val id = Crypto.newId()
             val chunks = payload.chunked(3000)
             for ((i, c) in chunks.withIndex()) {
                 val body = "$kind|$id|$i|${chunks.size}|$c"

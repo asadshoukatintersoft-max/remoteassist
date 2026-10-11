@@ -2,6 +2,10 @@ package com.remoteassist.fyp
 
 import android.content.Context
 import android.hardware.display.DisplayManager
+import org.json.JSONArray
+import org.webrtc.PeerConnection
+import java.net.HttpURLConnection
+import java.net.URL
 import android.util.DisplayMetrics
 import android.view.Display
 import org.webrtc.DefaultVideoDecoderFactory
@@ -40,4 +44,36 @@ fun realScreenSize(ctx: Context): Pair<Int, Int> {
     val d = ctx.getSystemService(DisplayManager::class.java).getDisplay(Display.DEFAULT_DISPLAY)
     d.getRealMetrics(dm)
     return Pair(dm.widthPixels, dm.heightPixels)
+}
+
+
+/** Downloads fresh relay (TURN) credentials if Config.TURN_API_URL is set. Call off the main thread. */
+object IceFetcher {
+    fun fetch(): List<PeerConnection.IceServer> {
+        if (Config.TURN_API_URL.isBlank()) return emptyList()
+        return try {
+            val c = URL(Config.TURN_API_URL).openConnection() as HttpURLConnection
+            c.connectTimeout = 6000
+            c.readTimeout = 6000
+            val text = c.inputStream.bufferedReader().use { it.readText() }
+            c.disconnect()
+            val arr = JSONArray(text)
+            val out = ArrayList<PeerConnection.IceServer>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val urls = ArrayList<String>()
+                val u = o.opt("urls")
+                if (u is JSONArray) { for (k in 0 until u.length()) urls.add(u.getString(k)) }
+                else if (u is String) urls.add(u)
+                if (urls.isEmpty()) continue
+                val b = PeerConnection.IceServer.builder(urls)
+                if (o.has("username")) b.setUsername(o.getString("username"))
+                if (o.has("credential")) b.setPassword(o.getString("credential"))
+                out.add(b.createIceServer())
+            }
+            out
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
 }

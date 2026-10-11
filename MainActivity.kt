@@ -250,7 +250,7 @@ class MainActivity : Activity() {
     private fun openAccessibility() {
         try {
             if (Build.VERSION.SDK_INT >= 34) {
-                val i = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
+                val i = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
                 i.putExtra("android.intent.extra.COMPONENT_NAME", ComponentName(this, ControlService::class.java).flattenToString())
                 startActivity(i)
                 return

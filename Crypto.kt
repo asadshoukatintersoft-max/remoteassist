@@ -53,8 +53,10 @@ object Crypto {
         }
     }
 
-    fun newCode(): String {
+    fun newCode(len: Int = Config.CODE_LENGTH): String {
         val r = SecureRandom()
-        return (0 until 8).joinToString("") { r.nextInt(10).toString() }
+        return (0 until len).joinToString("") { r.nextInt(10).toString() }
     }
+
+    fun newId(): String = newCode(10)
 }
