@@ -15,6 +15,8 @@ import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpParameters
+import org.webrtc.RtpSender
 import org.webrtc.ScreenCapturerAndroid
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
@@ -43,6 +45,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private var texHelper: SurfaceTextureHelper? = null
     private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
+    private var videoSender: RtpSender? = null
     private var audioSource: AudioSource? = null
     private var audioTrack: AudioTrack? = null
     private var dc: DataChannel? = null
@@ -58,7 +61,20 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
 
     // ---------------------------------------------------------------- start
 
-    fun startOwner(data: Intent) {
+    private var fetchedIce: List<PeerConnection.IceServer> = emptyList()
+
+    private fun loadIce(next: () -> Unit) {
+        Thread {
+            val l = IceFetcher.fetch()
+            main.post { fetchedIce = l; if (!closed) next() }
+        }.start()
+    }
+
+    fun startOwner(data: Intent) = loadIce { doStartOwner(data) }
+
+    fun startHelper() = loadIce { doStartHelper() }
+
+    private fun doStartOwner(data: Intent) {
         try {
             Rtc.init(ctx)
             createPc()
@@ -68,7 +84,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
             addAudio()
 
             val (sw, sh) = realScreenSize(ctx)
-            val scale = 720f / minOf(sw, sh)
+            val scale = minOf(1f, Config.MAX_SHORT_SIDE.toFloat() / minOf(sw, sh))
             val w = (sw * scale).toInt() / 2 * 2
             val h = (sh * scale).toInt() / 2 * 2
 
@@ -80,17 +96,19 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 }
             })
             capturer!!.initialize(texHelper, ctx, videoSource!!.capturerObserver)
-            capturer!!.startCapture(w, h, 15)
+            capturer!!.startCapture(w, h, Config.FPS)
 
             videoTrack = Rtc.factory.createVideoTrack("screen", videoSource)
             videoTrack!!.setEnabled(false) // stays black until the owner taps Allow
-            p.addTrack(videoTrack, listOf("s"))
+            videoSender = p.addTrack(videoTrack, listOf("s"))
 
             signaling = Signaling(code, "A") { onAnswer(it) }.also { it.start() }
 
             p.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(d: SessionDescription?) {
-                    p.setLocalDescription(SdpAdapter(), d)
+                    val d2 = if (d != null && Config.PREFER_H264)
+                        SessionDescription(d.type, preferH264(d.description)) else d
+                    p.setLocalDescription(SdpAdapter(), d2)
                     main.post { waitGather { sendSdp("O") } }
                 }
                 override fun onCreateFailure(e: String?) {
@@ -110,7 +128,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         }
     }
 
-    fun startHelper() {
+    private fun doStartHelper() {
         try {
             Rtc.init(ctx)
             createPc()
@@ -207,7 +225,9 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private fun createPc() {
         val ice = ArrayList<PeerConnection.IceServer>()
         for (s in Config.STUN) ice.add(PeerConnection.IceServer.builder(s).createIceServer())
-        if (Config.TURN_URLS.isNotEmpty()) {
+        if (fetchedIce.isNotEmpty()) {
+            ice.addAll(fetchedIce)
+        } else if (Config.TURN_URLS.isNotEmpty()) {
             ice.add(
                 PeerConnection.IceServer.builder(Config.TURN_URLS)
                     .setUsername(Config.TURN_USER)
@@ -223,7 +243,8 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private fun addAudio() {
         audioSource = Rtc.factory.createAudioSource(MediaConstraints())
         audioTrack = Rtc.factory.createAudioTrack("mic", audioSource)
-        audioTrack!!.setEnabled(!AppState.micMuted)
+        // The owner's microphone stays off until they approve the helper.
+        audioTrack!!.setEnabled(!AppState.micMuted && role == Role.HELPER)
         pc?.addTrack(audioTrack, listOf("s"))
     }
 
@@ -234,13 +255,17 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 if (closed) return@post
                 when (s) {
                     PeerConnection.IceConnectionState.FAILED ->
-                        end("The connection failed. Please try again.", false)
+                        end(
+                            if (Config.TURN_API_URL.isBlank())
+                                "The two phones could not reach each other. They are on different networks and no relay server is set up yet (see Config.kt)."
+                            else "The connection failed. Please try again.", false)
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
                         AppState.message = "Connection is unstable…"
                         AppState.changed()
                     }
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> {
+                        tuneVideo()
                         AppState.message = ""
                         AppState.changed()
                     }
@@ -324,7 +349,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 AppState.message = j.optString("m")
                 AppState.changed()
             }
-            "tap", "swipe", "nav" -> if (role == Role.OWNER && AppState.controlGranted) applyControl(j)
+            "tap", "swipe", "nav", "type" -> if (role == Role.OWNER && AppState.controlGranted) applyControl(j)
             "bye" -> end(
                 if (role == Role.OWNER) "The helper left the session." else "The other person ended the session.",
                 false
@@ -339,15 +364,56 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
             return
         }
         when (j.optString("t")) {
-            "tap" -> svc.swipe(j.optDouble("x").toFloat(), j.optDouble("y").toFloat(),
-                j.optDouble("x").toFloat(), j.optDouble("y").toFloat(), 60)
+            "tap" -> svc.tap(j.optDouble("x").toFloat(), j.optDouble("y").toFloat())
             "swipe" -> svc.swipe(
                 j.optDouble("x1").toFloat(), j.optDouble("y1").toFloat(),
                 j.optDouble("x2").toFloat(), j.optDouble("y2").toFloat(),
                 j.optLong("d", 300)
             )
             "nav" -> svc.nav(j.optString("k"))
+            "type" -> {
+                val ok = svc.typeText(j.optString("s"), j.optBoolean("clear"), j.optBoolean("enter"))
+                if (!ok) sendCtl(JSONObject().put("t", "err").put("m", "No text box is selected on the other phone. Tap a text box first, then type again."))
+            }
         }
+    }
+
+    // ---------------------------------------------------------------- quality
+
+    /** Reorders the video codecs so hardware H.264 is tried first (falls back to VP8 automatically). */
+    private fun preferH264(sdp: String): String {
+        val lines = sdp.split("\r\n").toMutableList()
+        val mIdx = lines.indexOfFirst { it.startsWith("m=video") }
+        if (mIdx < 0) return sdp
+        val h264 = lines.filter { it.startsWith("a=rtpmap:") && it.contains(" H264/") }
+            .map { it.substringAfter("a=rtpmap:").substringBefore(" ") }
+        if (h264.isEmpty()) return sdp
+        val parts = lines[mIdx].split(" ")
+        if (parts.size <= 3) return sdp
+        val pts = parts.drop(3)
+        val ordered = pts.filter { it in h264 } + pts.filter { it !in h264 }
+        lines[mIdx] = (parts.take(3) + ordered).joinToString(" ")
+        return lines.joinToString("\r\n")
+    }
+
+    /** Lifts WebRTC's conservative default limits so text on the shared screen stays sharp and smooth. */
+    private fun tuneVideo() {
+        if (role != Role.OWNER) return
+        try {
+            val s = videoSender
+            if (s != null) {
+                val p = s.parameters
+                for (e in p.encodings) {
+                    e.maxBitrateBps = Config.MAX_BITRATE
+                    e.minBitrateBps = Config.MIN_BITRATE
+                    e.maxFramerate = Config.FPS
+                    e.scaleResolutionDownBy = 1.0
+                }
+                p.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+                s.setParameters(p)
+            }
+        } catch (_: Exception) {}
+        try { pc?.setBitrate(Config.MIN_BITRATE, Config.START_BITRATE, Config.MAX_BITRATE) } catch (_: Exception) {}
     }
 
     // ---------------------------------------------------------------- actions
@@ -355,6 +421,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     /** Owner: let the helper see the screen. */
     fun approveView() {
         videoTrack?.setEnabled(true)
+        audioTrack?.setEnabled(!AppState.micMuted)
         sendCtl(JSONObject().put("t", "view").put("on", true))
         AppState.phase = Phase.LIVE
         AppState.changed()

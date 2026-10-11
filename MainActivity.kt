@@ -2,6 +2,8 @@ package com.remoteassist.fyp
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -44,6 +46,7 @@ class MainActivity : Activity() {
     private var downY = 0f
     private var downT = 0L
     private var pendingCode: String? = null
+    private var askedControlSetup = false
     private val listener: () -> Unit = { render() }
 
     private val BLUE = 0xFF1565C0.toInt()
@@ -226,6 +229,7 @@ class MainActivity : Activity() {
             } catch (e: Exception) { toast("Open Settings > Apps > RemoteAssist > Battery > Unrestricted") }
         })
 
+        if (Config.CONTROL_ENABLED) {
         c.addView(text("3. Remote control  ${if (a11yOn()) "✔ done" else "✘ not yet"}", 18f, true))
         c.addView(text("Only needed on the phone that is being helped, and only if you want your helper to tap for you. It stays inactive until you press \"Give control\"."))
         if (!a11yOn()) {
@@ -235,29 +239,52 @@ class MainActivity : Activity() {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             })
         }
+        }
         c.addView(spacer(12))
         c.addView(button("Refresh", GREEN) { render() })
         c.addView(button("Back", GREY) { screen = Screen.HOME; render() })
         return scroll(c)
     }
 
+    /** Opens the exact settings page for RemoteAssist when the phone supports it, else the general list. */
     private fun openAccessibility() {
+        try {
+            if (Build.VERSION.SDK_INT >= 34) {
+                val i = Intent(Settings.ACTION_ACCESSIBILITY_DETAILS_SETTINGS)
+                i.putExtra("android.intent.extra.COMPONENT_NAME", ComponentName(this, ControlService::class.java).flattenToString())
+                startActivity(i)
+                return
+            }
+        } catch (_: Exception) {}
         try { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } catch (e: Exception) { toast("Open Settings > Accessibility") }
+    }
+
+    /** Friendly one-time pop-up that takes the owner straight to the switch. */
+    private fun askForControlSetup(thenContinue: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("One quick step")
+            .setMessage("To let your helper tap on your phone, turn on \"RemoteAssist\" in the page that opens next:\n\n1. Tap the RemoteAssist switch (ON)\n2. Tap Allow / OK\n3. Come back to this app\n\nIf the switch is greyed out: open App info > ⋮ menu > Allow restricted settings, then try again.")
+            .setPositiveButton("Open settings") { _, _ -> openAccessibility() }
+            .setNeutralButton("App info") { _, _ ->
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+            .setNegativeButton("Skip (view only)") { _, _ -> thenContinue() }
+            .show()
     }
 
     private fun joinView(): View {
         val c = column()
         c.addView(text("Join a session", 26f, true, GREEN))
-        c.addView(text("Ask the person you're helping to open RemoteAssist, tap \"I need help\", and read you the 8-digit code."))
+        c.addView(text("Ask the person you're helping to open RemoteAssist, tap \"I need help\", and read you the ${Config.CODE_LENGTH}-digit code."))
         val et = EditText(this)
         et.inputType = InputType.TYPE_CLASS_NUMBER
-        et.hint = "1234 5678"
+        et.hint = "1".repeat(Config.CODE_LENGTH).replace(Regex("1"), "•")
         et.textSize = 30f
         et.gravity = Gravity.CENTER
         c.addView(et, LinearLayout.LayoutParams(MATCH, WRAP))
         c.addView(button("Join", GREEN) {
             val code = et.text.toString().filter { it.isDigit() }
-            if (code.length != 8) toast("Please enter all 8 digits.") else startHelperFlow(code)
+            if (code.length != Config.CODE_LENGTH) toast("Please enter all ${Config.CODE_LENGTH} digits.") else startHelperFlow(code)
         })
         c.addView(button("Back", GREY) { screen = Screen.HOME; render() })
         return scroll(c)
@@ -275,13 +302,13 @@ class MainActivity : Activity() {
         val c = column()
         when (phase) {
             Phase.CONNECTING -> {
-                c.addView(text("Starting…", 26f, true, BLUE))
-                c.addView(text("Android may ask: \"Start recording or casting?\" — tap Start now."))
+                c.addView(text("Connecting…", 24f, true, BLUE))
+                c.addView(text("If Android asks \"Start recording or casting?\", tap Start now.", 14f, color = GREY))
             }
             Phase.WAITING_FOR_HELPER -> {
                 c.addView(text("Your session code", 22f, true, BLUE))
-                c.addView(text(spaced(AppState.code), 44f, true, 0xFF000000.toInt(), center = true))
-                c.addView(text("Send this code to your helper (call, WhatsApp, SMS). They open RemoteAssist, tap \"I'm helping someone\", and type it in.\n\nOnly share it with someone you trust. It works once and expires in ${Config.CODE_VALID_MIN} minutes."))
+                c.addView(text(spaced(AppState.code), 56f, true, 0xFF000000.toInt(), center = true))
+                c.addView(text("Tell this code to your helper. They open RemoteAssist, tap \"I'm helping someone\" and type it in.\n\nOnly share it with someone you trust. It expires in ${Config.CODE_VALID_MIN} minutes."))
                 c.addView(button("Send code", BLUE) {
                     val i = Intent(Intent.ACTION_SEND)
                     i.type = "text/plain"
@@ -297,10 +324,10 @@ class MainActivity : Activity() {
                 c.addView(button("Decline", RED) { AppState.session?.end("You declined the helper.") })
             }
             else -> { // LIVE
-                c.addView(text("Sharing your screen", 26f, true, GREEN))
-                if (AppState.message.isNotBlank()) c.addView(text(AppState.message, 15f, color = RED))
-                c.addView(text("You can now use your phone normally. Your helper sees your screen and you can talk. To come back here, pull down the notification bar and tap RemoteAssist."))
-                c.addView(spacer(8))
+                c.addView(text("Sharing your screen", 22f, true, GREEN))
+                if (AppState.message.isNotBlank()) c.addView(text(AppState.message, 14f, color = RED))
+                c.addView(text("Use your phone normally. To return here, tap the RemoteAssist notification.", 13f, color = GREY))
+                if (Config.CONTROL_ENABLED) {
                 if (AppState.controlGranted) {
                     c.addView(text("Your helper is controlling your phone right now. Please don't touch the screen.", 17f, true, RED))
                     c.addView(button("Take back control", RED) { AppState.session?.setControl(false) })
@@ -309,10 +336,11 @@ class MainActivity : Activity() {
                     val label = if (AppState.controlRequested) "Allow control" else "Give control to helper"
                     c.addView(button(label, BLUE) {
                         if (a11yOn()) AppState.session?.setControl(true)
-                        else { toast("First turn on remote control (one time)."); openAccessibility() }
+                        else askForControlSetup { }
                     })
                     if (AppState.controlRequested) c.addView(button("Not now", GREY) { AppState.controlRequested = false; render() })
                     if (!a11yOn()) c.addView(text("Remote control is not turned on yet. Tap the button above and follow the steps, or see \"Setup check\" on the start screen.", 14f, color = GREY))
+                }
                 }
                 c.addView(button(if (AppState.micMuted) "Unmute my microphone" else "Mute my microphone", GREY) {
                     AppState.session?.setMic(AppState.micMuted)
@@ -341,11 +369,11 @@ class MainActivity : Activity() {
         val status = text(
             when {
                 AppState.message.isNotBlank() -> AppState.message
-                AppState.controlGranted -> "You are in control. Tap and swipe on the screen below."
-                else -> "Watching only."
-            }, 14f, color = Color.WHITE
+                AppState.controlGranted -> "You are in control. Tap and swipe on the screen."
+                else -> "Watching. Talk to guide them."
+            }, 12f, color = Color.WHITE
         )
-        status.setPadding(dp(12), dp(6), dp(12), dp(6))
+        status.setPadding(dp(10), dp(2), dp(10), dp(2))
         outer.addView(status, LinearLayout.LayoutParams(MATCH, WRAP))
 
         val frame = FrameLayout(this)
@@ -367,39 +395,61 @@ class MainActivity : Activity() {
         outer.addView(frame, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         val bar = LinearLayout(this)
-        bar.orientation = LinearLayout.VERTICAL
+        bar.orientation = LinearLayout.HORIZONTAL
         bar.setBackgroundColor(0xFF111111.toInt())
-        bar.setPadding(dp(10), dp(4), dp(10), dp(4))
-
-        val row1 = LinearLayout(this)
-        row1.orientation = LinearLayout.HORIZONTAL
-        fun add(row: LinearLayout, label: String, color: Int, onClick: () -> Unit) {
+        bar.setPadding(dp(4), dp(2), dp(4), dp(2))
+        fun add(label: String, color: Int, onClick: () -> Unit) {
             val b = button(label, color, onClick)
-            b.textSize = 14f
-            b.setPadding(dp(6), dp(10), dp(6), dp(10))
+            b.textSize = 12f
+            b.minHeight = 0
+            b.minimumHeight = 0
+            b.minWidth = 0
+            b.minimumWidth = 0
+            b.setPadding(dp(4), dp(8), dp(4), dp(8))
             val lp = LinearLayout.LayoutParams(0, WRAP, 1f)
-            lp.setMargins(dp(3), dp(4), dp(3), dp(4))
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2))
             b.layoutParams = lp
-            row.addView(b)
+            bar.addView(b)
         }
-        if (AppState.controlGranted) {
-            add(row1, "Back", BLUE) { navKey("back") }
-            add(row1, "Home", BLUE) { navKey("home") }
-            add(row1, "Recents", BLUE) { navKey("recents") }
-        } else {
-            add(row1, "Ask for control", BLUE) { AppState.session?.requestControl() }
+        add(if (AppState.micMuted) "Muted" else "Mic", GREY) { AppState.session?.setMic(AppState.micMuted) }
+        if (Config.CONTROL_ENABLED) {
+            if (AppState.controlGranted) {
+                add("Back", BLUE) { navKey("back") }
+                add("Home", BLUE) { navKey("home") }
+                add("Apps", BLUE) { navKey("recents") }
+                add("Panel", BLUE) { navKey("notif") }
+                add("Type", GREEN) { askTypeText() }
+            } else {
+                add("Ask control", BLUE) { AppState.session?.requestControl() }
+            }
         }
-        val row2 = LinearLayout(this)
-        row2.orientation = LinearLayout.HORIZONTAL
-        add(row2, if (AppState.micMuted) "Unmute" else "Mute", GREY) { AppState.session?.setMic(AppState.micMuted) }
-        add(row2, "End session", RED) { AppState.session?.end("You left the session.") }
-        bar.addView(row1)
-        bar.addView(row2)
+        add("End", RED) { AppState.session?.end("You left the session.") }
         outer.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
         return outer
     }
 
     // ------------------------------------------------- helper: touch → phone
+
+    /** Helper types here; the text goes into the text box selected on the other phone. */
+    private fun askTypeText() {
+        val et = EditText(this)
+        et.hint = "Type here"
+        et.textSize = 18f
+        AlertDialog.Builder(this)
+            .setTitle("Type on the other phone")
+            .setMessage("First tap the text box (for example the search bar) on their screen.")
+            .setView(et)
+            .setPositiveButton("Send") { _, _ ->
+                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", et.text.toString()))
+            }
+            .setNeutralButton("Send + Search") { _, _ ->
+                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", et.text.toString()).put("enter", true))
+            }
+            .setNegativeButton("Clear box") { _, _ ->
+                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", "").put("clear", true))
+            }
+            .show()
+    }
 
     private fun navKey(k: String) {
         AppState.session?.sendCtl(JSONObject().put("t", "nav").put("k", k))
@@ -430,11 +480,13 @@ class MainActivity : Activity() {
                     val dur = e.eventTime - downT
                     val dist = hypot(b.first - a.first, b.second - a.second)
                     val j = JSONObject()
-                    if (dist < 0.015f && dur < 350) {
+                    // Swipes that start at a screen edge (notification panel, back gesture) snap to the edge.
+                    fun snap(v: Float) = if (v < 0.04f) 0.001f else if (v > 0.96f) 0.999f else v
+                    if (dist < 0.03f && dur < 400) {
                         j.put("t", "tap").put("x", a.first.toDouble()).put("y", a.second.toDouble())
                     } else {
                         j.put("t", "swipe")
-                            .put("x1", a.first.toDouble()).put("y1", a.second.toDouble())
+                            .put("x1", snap(a.first).toDouble()).put("y1", snap(a.second).toDouble())
                             .put("x2", b.first.toDouble()).put("y2", b.second.toDouble())
                             .put("d", dur.coerceIn(60L, 3000L))
                     }
@@ -461,6 +513,11 @@ class MainActivity : Activity() {
     }
 
     private fun startOwnerFlow() {
+        if (Config.CONTROL_ENABLED && !a11yOn() && !askedControlSetup) {
+            askedControlSetup = true
+            askForControlSetup { startOwnerFlow() }
+            return
+        }
         if (!micOk() || (Build.VERSION.SDK_INT >= 33 &&
                     checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
         ) {
