@@ -39,11 +39,11 @@ object Config {
     const val TURN_API_URL = ""
 
     // ---- Video quality (raise for sharper, lower for slower networks / weaker phones)
-    const val MAX_SHORT_SIDE = 1080      // pixels on the short side of the shared screen
-    const val FPS = 24
-    const val START_BITRATE = 2_000_000  // bits per second at start
-    const val MIN_BITRATE = 600_000
-    const val MAX_BITRATE = 5_000_000
+    const val MAX_SHORT_SIDE = 720       // pixels on the short side of the shared screen (720 = smooth)
+    const val FPS = 30
+    const val START_BITRATE = 1_500_000  // bits per second at start
+    const val MIN_BITRATE = 300_000
+    const val MAX_BITRATE = 3_000_000
     /** Hardware H.264 is much faster than the default software VP8 on most phones. */
     const val PREFER_H264 = true
 
@@ -51,5 +51,8 @@ object Config {
     const val CODE_LENGTH = 4
 
     /** How long a code stays valid while waiting for the helper. */
-    const val CODE_VALID_MIN = 5
+    const val CODE_VALID_MIN = 30
+
+    /** After a session has started it only ends by button. If the link drops, wait this long to recover. */
+    const val RECONNECT_MIN = 30
 }

@@ -58,6 +58,8 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private var waitTimeout: Runnable? = null
     private var connectTimeout: Runnable? = null
     private var audioSaved = false
+    private var everConnected = false
+    private var lostTimeout: Runnable? = null
 
     // ---------------------------------------------------------------- start
 
@@ -255,16 +257,26 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 if (closed) return@post
                 when (s) {
                     PeerConnection.IceConnectionState.FAILED ->
-                        end(
-                            if (Config.TURN_API_URL.isBlank())
-                                "The two phones could not reach each other. They are on different networks and no relay server is set up yet (see Config.kt)."
-                            else "The connection failed. Please try again.", false)
+                        if (everConnected) {
+                            // Already connected once: never drop the session on a network blip.
+                            AppState.message = "Connection lost. Trying to reconnect…"
+                            AppState.changed()
+                            armLostTimeout()
+                        } else {
+                            end(
+                                if (Config.TURN_API_URL.isBlank())
+                                    "The two phones could not reach each other. They are on different networks and no relay server is set up yet (see Config.kt)."
+                                else "The connection failed. Please try again.", false)
+                        }
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
                         AppState.message = "Connection is unstable…"
                         AppState.changed()
+                        armLostTimeoutIfConnected()
                     }
                     PeerConnection.IceConnectionState.CONNECTED,
                     PeerConnection.IceConnectionState.COMPLETED -> {
+                        lostTimeout?.let { main.removeCallbacks(it) }
+                        lostTimeout = null
                         tuneVideo()
                         AppState.message = ""
                         AppState.changed()
@@ -296,6 +308,17 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         }
     }
 
+    /** If the link drops after a session started, wait this long for it to come back before giving up. */
+    private fun armLostTimeoutIfConnected() {
+        if (everConnected) armLostTimeout()
+    }
+
+    private fun armLostTimeout() {
+        if (lostTimeout != null) return
+        lostTimeout = Runnable { end("The connection was lost and could not be restored.", false) }
+        main.postDelayed(lostTimeout!!, Config.RECONNECT_MIN * 60_000L)
+    }
+
     // ---------------------------------------------------------- data channel
 
     private val dcObserver = object : DataChannel.Observer {
@@ -314,6 +337,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
 
     private fun onChannelOpen() {
         if (closed) return
+        everConnected = true
         connectTimeout?.let { main.removeCallbacks(it) }
         waitTimeout?.let { main.removeCallbacks(it) }
         useSpeaker(true)
@@ -409,7 +433,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                     e.maxFramerate = Config.FPS
                     e.scaleResolutionDownBy = 1.0
                 }
-                p.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
+                p.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
                 s.setParameters(p)
             }
         } catch (_: Exception) {}
@@ -489,6 +513,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private fun release() {
         waitTimeout?.let { main.removeCallbacks(it) }
         connectTimeout?.let { main.removeCallbacks(it) }
+        lostTimeout?.let { main.removeCallbacks(it) }
         useSpeaker(false)
         try { signaling?.stop() } catch (_: Exception) {}
         try { setSink(null) } catch (_: Exception) {}

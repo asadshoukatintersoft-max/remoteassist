@@ -47,6 +47,10 @@ class MainActivity : Activity() {
     private var downT = 0L
     private var pendingCode: String? = null
     private var askedControlSetup = false
+    private var vidRot = 0
+    private var liveView: LinearLayout? = null
+    private var liveStatus: TextView? = null
+    private var liveBar: LinearLayout? = null
     private val listener: () -> Unit = { render() }
 
     private val BLUE = 0xFF1565C0.toInt()
@@ -103,10 +107,16 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------ rendering
 
     private fun render() {
-        root.removeAllViews()
         val role = AppState.role
         val phase = AppState.phase
         val live = role == Role.HELPER && phase == Phase.LIVE
+        // While watching, keep the video view in place and only refresh the label and buttons.
+        // Rebuilding it made the picture blink out whenever anything changed (e.g. tapping Mute).
+        if (live && liveView != null && liveView?.parent === root) {
+            updateLive()
+            return
+        }
+        root.removeAllViews()
         if (!live) releaseRenderer()
 
         if (phase == Phase.IDLE || phase == Phase.ENDED) {
@@ -361,43 +371,56 @@ class MainActivity : Activity() {
             return scroll(c)
         }
 
-        // LIVE
+        // LIVE: built once and kept, so the picture never blinks
+        liveView?.let { updateLive(); return it }
+
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
         outer.setBackgroundColor(Color.BLACK)
 
-        val status = text(
-            when {
-                AppState.message.isNotBlank() -> AppState.message
-                AppState.controlGranted -> "You are in control. Tap and swipe on the screen."
-                else -> "Watching. Talk to guide them."
-            }, 12f, color = Color.WHITE
-        )
+        val status = text("", 12f, color = Color.WHITE)
         status.setPadding(dp(10), dp(2), dp(10), dp(2))
+        liveStatus = status
         outer.addView(status, LinearLayout.LayoutParams(MATCH, WRAP))
 
         val frame = FrameLayout(this)
-        var r = renderer
-        if (r == null) {
-            r = SurfaceViewRenderer(this)
-            r.init(Rtc.egl.eglBaseContext, object : RendererCommon.RendererEvents {
-                override fun onFirstFrameRendered() {}
-                override fun onFrameResolutionChanged(w: Int, h: Int, rotation: Int) { vidW = w; vidH = h }
-            })
-            r.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-            r.setEnableHardwareScaler(true)
-            r.setOnTouchListener { v, e -> onVideoTouch(v, e) }
-            renderer = r
-            AppState.session?.setSink(r)
-        }
-        (r.parent as? ViewGroup)?.removeView(r)
-        frame.addView(r, FrameLayout.LayoutParams(MATCH, MATCH))
+        val r = SurfaceViewRenderer(this)
+        r.init(Rtc.egl.eglBaseContext, object : RendererCommon.RendererEvents {
+            override fun onFirstFrameRendered() {}
+            override fun onFrameResolutionChanged(w: Int, h: Int, rotation: Int) { vidW = w; vidH = h; vidRot = rotation }
+        })
+        r.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+        r.setEnableHardwareScaler(true)
+        r.setOnTouchListener { v, e -> onVideoTouch(v, e) }
+        renderer = r
+        AppState.session?.setSink(r)
+        // WRAP_CONTENT (not MATCH_PARENT): the view shrinks to the exact shape of the other phone's
+        // screen, so the WHOLE screen is visible and touches map exactly. With MATCH_PARENT the
+        // picture is stretched to fill the box and its top/bottom get cropped.
+        frame.addView(r, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
         outer.addView(frame, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         val bar = LinearLayout(this)
         bar.orientation = LinearLayout.HORIZONTAL
         bar.setBackgroundColor(0xFF111111.toInt())
         bar.setPadding(dp(4), dp(2), dp(4), dp(2))
+        liveBar = bar
+        outer.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
+
+        liveView = outer
+        updateLive()
+        return outer
+    }
+
+    /** Refreshes the status line and the button bar without touching the video view. */
+    private fun updateLive() {
+        liveStatus?.text = when {
+            AppState.message.isNotBlank() -> AppState.message
+            AppState.controlGranted -> "You are in control. Tap and swipe on the screen."
+            else -> "Watching. Talk to guide them."
+        }
+        val bar = liveBar ?: return
+        bar.removeAllViews()
         fun add(label: String, color: Int, onClick: () -> Unit) {
             val b = button(label, color, onClick)
             b.textSize = 12f
@@ -424,8 +447,6 @@ class MainActivity : Activity() {
             }
         }
         add("End", RED) { AppState.session?.end("You left the session.") }
-        outer.addView(bar, LinearLayout.LayoutParams(MATCH, WRAP))
-        return outer
     }
 
     // ------------------------------------------------- helper: touch → phone
@@ -457,16 +478,18 @@ class MainActivity : Activity() {
 
     /** Converts a touch position on the view into 0..1 coordinates of the remote screen. */
     private fun norm(x: Float, y: Float, v: View): Pair<Float, Float>? {
-        if (vidW <= 0 || vidH <= 0) return null
-        val scale = minOf(v.width.toFloat() / vidW, v.height.toFloat() / vidH)
-        val w = vidW * scale
-        val h = vidH * scale
+        val fw = if (vidRot == 90 || vidRot == 270) vidH else vidW
+        val fh = if (vidRot == 90 || vidRot == 270) vidW else vidH
+        if (fw <= 0 || fh <= 0 || v.width <= 0 || v.height <= 0) return null
+        val scale = minOf(v.width.toFloat() / fw, v.height.toFloat() / fh)
+        val w = fw * scale
+        val h = fh * scale
         val ox = (v.width - w) / 2f
         val oy = (v.height - h) / 2f
         val nx = (x - ox) / w
         val ny = (y - oy) / h
-        if (nx < 0f || nx > 1f || ny < 0f || ny > 1f) return null
-        return Pair(nx, ny)
+        if (nx < -0.03f || nx > 1.03f || ny < -0.03f || ny > 1.03f) return null
+        return Pair(nx.coerceIn(0f, 1f), ny.coerceIn(0f, 1f))
     }
 
     private fun onVideoTouch(v: View, e: MotionEvent): Boolean {
@@ -501,6 +524,9 @@ class MainActivity : Activity() {
         AppState.session?.setSink(null)
         renderer?.release()
         renderer = null
+        liveView = null
+        liveStatus = null
+        liveBar = null
     }
 
     // ------------------------------------------------------ flows/permissions
@@ -529,8 +555,12 @@ class MainActivity : Activity() {
 
     private fun launchCapture() {
         val mpm = getSystemService(MediaProjectionManager::class.java)
+        // Android 14+: only offer "Entire screen" (not "a single app"), so the helper sees the whole phone.
+        val intent = if (Build.VERSION.SDK_INT >= 34)
+            mpm.createScreenCaptureIntent(android.media.projection.MediaProjectionConfig.createConfigForDefaultDisplay())
+        else mpm.createScreenCaptureIntent()
         @Suppress("DEPRECATION")
-        startActivityForResult(mpm.createScreenCaptureIntent(), 42)
+        startActivityForResult(intent, 42)
     }
 
     private fun startHelperFlow(code: String) {
