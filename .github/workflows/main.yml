@@ -1,0 +1,71 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore folder structure
+        run: |
+          set -e
+          J=app/src/main/java/com/remoteassist/fyp
+          mkdir -p $J app/src/main/res/values app/src/main/res/xml app/src/main/res/drawable
+          for f in AppState Config ControlService Crypto MainActivity Rtc Session ShareService Signaling; do
+            [ -f "$f.kt" ] && mv "$f.kt" $J/
+          done
+          mv AndroidManifest.xml app/src/main/
+          mv accessibility_config.xml app/src/main/res/xml/
+          mv strings.xml app/src/main/res/values/
+          mv ic_launcher.xml ic_stat.xml app/src/main/res/drawable/
+          mv proguard-rules.pro app/
+          for f in build.gradle*.kts; do
+            if grep -q namespace "$f"; then mv "$f" app/build.gradle.kts; else mv "$f" root-build.tmp; fi
+          done
+          mv root-build.tmp build.gradle.kts
+          find . -path ./.git -prune -o -type f -not -path "./.github/*" -print | sort
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Prepare signing key
+        run: |
+          keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -alias release \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass remoteassist-ks -keypass remoteassist-ks -dname "CN=RemoteAssist"
+          echo "KS_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "KS_PASS=remoteassist-ks" >> "$GITHUB_ENV"
+          echo "KS_ALIAS=release" >> "$GITHUB_ENV"
+
+      - name: Build release APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk RemoteAssist.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RemoteAssist-apk
+          path: RemoteAssist.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: RemoteAssist v${{ github.run_number }}
+          make_latest: true
+          files: RemoteAssist.apk
