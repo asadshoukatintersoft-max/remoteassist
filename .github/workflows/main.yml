@@ -31,7 +31,20 @@ jobs:
             if grep -q namespace "$f"; then mv "$f" app/build.gradle.kts; else mv "$f" root-build.tmp; fi
           done
           mv root-build.tmp build.gradle.kts
-          find . -path ./.git -prune -o -type f -not -path "./.github/*" -print | sort
+
+      - name: Inject relay URL
+        env:
+          TURN_URL: ${{ secrets.TURN_API_URL }}
+        run: |
+          python3 - <<'PY'
+          import os
+          p = "app/src/main/java/com/remoteassist/fyp/Config.kt"
+          s = open(p).read()
+          url = os.environ.get("TURN_URL", "")
+          s = s.replace('const val TURN_API_URL = ""', 'const val TURN_API_URL = "' + url + '"')
+          open(p, "w").write(s)
+          print("relay URL injected:", bool(url))
+          PY
 
       - uses: actions/setup-java@v4
         with:
