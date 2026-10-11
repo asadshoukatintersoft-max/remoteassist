@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 
 /**
  * Keeps the session alive while the user uses other apps (Android requires a visible
@@ -18,6 +19,7 @@ import android.os.IBinder
 class ShareService : Service() {
 
     private val listener: () -> Unit = { onStateChanged() }
+    private var wake: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -29,6 +31,7 @@ class ShareService : Service() {
     }
 
     override fun onDestroy() {
+        releaseScreen()
         AppState.listeners.remove(listener)
         super.onDestroy()
     }
@@ -38,6 +41,7 @@ class ShareService : Service() {
         when (intent?.action) {
             "owner" -> {
                 if (!goForeground(true)) return START_NOT_STICKY
+                keepScreenOn()
                 val data = intent.getParcelableExtra<Intent>("data")
                 if (data == null) { fail("Screen sharing permission was missing."); return START_NOT_STICKY }
                 AppState.reset()
@@ -65,6 +69,34 @@ class ShareService : Service() {
             "stop" -> AppState.session?.end("You ended the session.")
         }
         return START_NOT_STICKY
+    }
+
+    /**
+     * Keeps the shared phone's screen on for the whole session. Without this the screen times out,
+     * the phone locks, and the helper is stuck looking at a black screen.
+     */
+    @Suppress("DEPRECATION")
+    private fun keepScreenOn() {
+        try {
+            if (wake?.isHeld == true) return
+            val pm = getSystemService(PowerManager::class.java)
+            val w = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "RemoteAssist:screen"
+            )
+            w.setReferenceCounted(false)
+            w.acquire(8 * 60 * 60 * 1000L)
+            wake = w
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun releaseScreen() {
+        try {
+            if (wake?.isHeld == true) wake?.release()
+        } catch (_: Exception) {
+        }
+        wake = null
     }
 
     private fun fail(msg: String) {
@@ -97,6 +129,7 @@ class ShareService : Service() {
 
     private fun onStateChanged() {
         if (AppState.phase == Phase.ENDED) {
+            releaseScreen()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         } else {

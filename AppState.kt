@@ -24,6 +24,7 @@ object AppState {
     @Volatile var controlGranted = false
     @Volatile var controlRequested = false
     @Volatile var micMuted = false
+    @Volatile var net: String = ""
     @Volatile var session: Session? = null
 
     val listeners = CopyOnWriteArrayList<() -> Unit>()
@@ -41,6 +42,7 @@ object AppState {
         controlGranted = false
         controlRequested = false
         micMuted = false
+        net = ""
         session = null
         changed()
     }

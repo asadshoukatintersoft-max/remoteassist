@@ -60,6 +60,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private var audioSaved = false
     private var everConnected = false
     private var lostTimeout: Runnable? = null
+    private var netPoll: Runnable? = null
 
     // ---------------------------------------------------------------- start
 
@@ -338,6 +339,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private fun onChannelOpen() {
         if (closed) return
         everConnected = true
+        startNetPoll()
         connectTimeout?.let { main.removeCallbacks(it) }
         waitTimeout?.let { main.removeCallbacks(it) }
         useSpeaker(true)
@@ -373,7 +375,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 AppState.message = j.optString("m")
                 AppState.changed()
             }
-            "tap", "swipe", "nav", "type" -> if (role == Role.OWNER && AppState.controlGranted) applyControl(j)
+            "tap", "swipe", "nav", "type", "ts", "tm", "te" -> if (role == Role.OWNER && AppState.controlGranted) applyControl(j)
             "bye" -> end(
                 if (role == Role.OWNER) "The helper left the session." else "The other person ended the session.",
                 false
@@ -395,6 +397,9 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 j.optLong("d", 300)
             )
             "nav" -> svc.nav(j.optString("k"))
+            "ts" -> svc.touchStart(j.optDouble("x").toFloat(), j.optDouble("y").toFloat())
+            "tm" -> svc.touchMove(j.optDouble("x").toFloat(), j.optDouble("y").toFloat())
+            "te" -> svc.touchEnd(j.optDouble("x", -1.0).toFloat(), j.optDouble("y", -1.0).toFloat())
             "type" -> {
                 val ok = svc.typeText(j.optString("s"), j.optBoolean("clear"), j.optBoolean("enter"))
                 if (!ok) sendCtl(JSONObject().put("t", "err").put("m", "No text box is selected on the other phone. Tap a text box first, then type again."))
@@ -442,6 +447,53 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
 
     // ---------------------------------------------------------------- actions
 
+    // ----------------------------------------------- connection info (helper side)
+
+    /** Shows "Direct" or "Relay" plus the round-trip time, so a slow link is easy to diagnose. */
+    private fun startNetPoll() {
+        if (role != Role.HELPER || netPoll != null) return
+        val r = object : Runnable {
+            override fun run() {
+                if (closed) return
+                pollNet()
+                main.postDelayed(this, 3000L)
+            }
+        }
+        netPoll = r
+        main.postDelayed(r, 1500L)
+    }
+
+    private fun pollNet() {
+        val p = pc ?: return
+        p.getStats { report ->
+            var text = ""
+            try {
+                val map = report.statsMap
+                val tr = map.values.firstOrNull { it.type == "transport" && it.members["selectedCandidatePairId"] != null }
+                var pair = if (tr != null) map[tr.members["selectedCandidatePairId"] as? String ?: ""] else null
+                if (pair == null) {
+                    pair = map.values.firstOrNull { it.type == "candidate-pair" && it.members["nominated"] == true && it.members["state"] == "succeeded" }
+                }
+                if (pair != null) {
+                    val lt = map[pair.members["localCandidateId"] as? String ?: ""]?.members?.get("candidateType") as? String
+                    val rt = map[pair.members["remoteCandidateId"] as? String ?: ""]?.members?.get("candidateType") as? String
+                    val rtt = (pair.members["currentRoundTripTime"] as? Number)?.toDouble()
+                    val kind = if (lt == "relay" || rt == "relay") "Relay" else "Direct"
+                    text = if (rtt != null) "$kind ${(rtt * 1000).toInt()} ms" else kind
+                }
+            } catch (_: Exception) {
+            }
+            if (text.isNotEmpty()) {
+                main.post {
+                    if (!closed && AppState.net != text) {
+                        AppState.net = text
+                        AppState.changed()
+                    }
+                }
+            }
+        }
+    }
+
     /** Owner: let the helper see the screen. */
     fun approveView() {
         videoTrack?.setEnabled(true)
@@ -455,6 +507,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     fun setControl(on: Boolean) {
         AppState.controlGranted = on
         AppState.controlRequested = false
+        if (!on) ControlService.instance?.touchCancel()
         sendCtl(JSONObject().put("t", "grant").put("on", on))
         AppState.changed()
     }
@@ -514,6 +567,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         waitTimeout?.let { main.removeCallbacks(it) }
         connectTimeout?.let { main.removeCallbacks(it) }
         lostTimeout?.let { main.removeCallbacks(it) }
+        netPoll?.let { main.removeCallbacks(it) }
         useSpeaker(false)
         try { signaling?.stop() } catch (_: Exception) {}
         try { setSink(null) } catch (_: Exception) {}

@@ -24,6 +24,8 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -48,6 +50,10 @@ class MainActivity : Activity() {
     private var pendingCode: String? = null
     private var askedControlSetup = false
     private var vidRot = 0
+    private var streaming = false
+    private var lastMoveT = 0L
+    private var lastNx = 0f
+    private var lastNy = 0f
     private var liveView: LinearLayout? = null
     private var liveStatus: TextView? = null
     private var liveBar: LinearLayout? = null
@@ -352,13 +358,21 @@ class MainActivity : Activity() {
                     if (!a11yOn()) c.addView(text("Remote control is not turned on yet. Tap the button above and follow the steps, or see \"Setup check\" on the start screen.", 14f, color = GREY))
                 }
                 }
-                c.addView(button(if (AppState.micMuted) "Unmute my microphone" else "Mute my microphone", GREY) {
-                    AppState.session?.setMic(AppState.micMuted)
-                })
+                c.addView(micTextButton())
                 c.addView(button("Stop sharing", RED) { AppState.session?.end("You stopped sharing.") })
             }
         }
         return scroll(c)
+    }
+
+    /** Big mic button for the phone owner: icon plus a short label. */
+    private fun micTextButton(): Button {
+        val b = button(if (AppState.micMuted) "Unmute microphone" else "Mute microphone", if (AppState.micMuted) RED else GREY) {
+            AppState.session?.setMic(AppState.micMuted)
+        }
+        b.setCompoundDrawablesWithIntrinsicBounds(MicDrawable(dp(24), AppState.micMuted, RED), null, null, null)
+        b.compoundDrawablePadding = dp(8)
+        return b
     }
 
     private fun helperView(phase: Phase): View {
@@ -414,11 +428,12 @@ class MainActivity : Activity() {
 
     /** Refreshes the status line and the button bar without touching the video view. */
     private fun updateLive() {
-        liveStatus?.text = when {
+        val base = when {
             AppState.message.isNotBlank() -> AppState.message
             AppState.controlGranted -> "You are in control. Tap and swipe on the screen."
             else -> "Watching. Talk to guide them."
         }
+        liveStatus?.text = if (AppState.net.isBlank()) base else "$base   [${AppState.net}]"
         val bar = liveBar ?: return
         bar.removeAllViews()
         fun add(label: String, color: Int, onClick: () -> Unit) {
@@ -434,7 +449,19 @@ class MainActivity : Activity() {
             b.layoutParams = lp
             bar.addView(b)
         }
-        add(if (AppState.micMuted) "Muted" else "Mic", GREY) { AppState.session?.setMic(AppState.micMuted) }
+        // Microphone: icon button (grey = on, red with a slash = muted), like a call screen
+        val mic = ImageButton(this)
+        mic.setImageDrawable(MicDrawable(dp(24), AppState.micMuted, RED))
+        mic.scaleType = ImageView.ScaleType.CENTER
+        val micBg = GradientDrawable()
+        micBg.setColor(if (AppState.micMuted) RED else GREY)
+        micBg.cornerRadius = dp(14).toFloat()
+        mic.background = micBg
+        mic.contentDescription = if (AppState.micMuted) "Unmute microphone" else "Mute microphone"
+        mic.setOnClickListener { AppState.session?.setMic(AppState.micMuted) }
+        val micLp = LinearLayout.LayoutParams(0, dp(40), 1f)
+        micLp.setMargins(dp(2), dp(2), dp(2), dp(2))
+        bar.addView(mic, micLp)
         if (Config.CONTROL_ENABLED) {
             if (AppState.controlGranted) {
                 add("Back", BLUE) { navKey("back") }
@@ -451,25 +478,30 @@ class MainActivity : Activity() {
 
     // ------------------------------------------------- helper: touch → phone
 
-    /** Helper types here; the text goes into the text box selected on the other phone. */
+    /** Live typing: every letter typed here appears instantly in the text box selected on the other phone. */
     private fun askTypeText() {
         val et = EditText(this)
         et.hint = "Type here"
         et.textSize = 18f
-        AlertDialog.Builder(this)
+        et.inputType = InputType.TYPE_CLASS_TEXT
+        et.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+            override fun onTextChanged(s: CharSequence?, st: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", s?.toString() ?: "").put("clear", true))
+            }
+        })
+        val d = AlertDialog.Builder(this)
             .setTitle("Type on the other phone")
-            .setMessage("First tap the text box (for example the search bar) on their screen.")
+            .setMessage("First tap the text box (for example the search bar) on their screen. What you type here appears there instantly.")
             .setView(et)
-            .setPositiveButton("Send") { _, _ ->
-                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", et.text.toString()))
+            .setPositiveButton("Search") { _, _ ->
+                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", et.text.toString()).put("clear", true).put("enter", true))
             }
-            .setNeutralButton("Send + Search") { _, _ ->
-                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", et.text.toString()).put("enter", true))
-            }
-            .setNegativeButton("Clear box") { _, _ ->
-                AppState.session?.sendCtl(JSONObject().put("t", "type").put("s", "").put("clear", true))
-            }
-            .show()
+            .setNegativeButton("Close", null)
+            .create()
+        d.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
+        d.show()
     }
 
     private fun navKey(k: String) {
@@ -494,26 +526,58 @@ class MainActivity : Activity() {
 
     private fun onVideoTouch(v: View, e: MotionEvent): Boolean {
         if (!AppState.controlGranted) return true
+        val session = AppState.session ?: return true
+        // Swipes that start at a screen edge (notification panel, back gesture) snap to the edge.
+        fun edge(p: Float) = if (p < 0.04f) 0.001f else if (p > 0.96f) 0.999f else p
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { downX = e.x; downY = e.y; downT = e.eventTime }
-            MotionEvent.ACTION_UP -> {
-                val a = norm(downX, downY, v)
-                val b = norm(e.x, e.y, v)
-                if (a != null && b != null) {
-                    val dur = e.eventTime - downT
-                    val dist = hypot(b.first - a.first, b.second - a.second)
-                    val j = JSONObject()
-                    // Swipes that start at a screen edge (notification panel, back gesture) snap to the edge.
-                    fun snap(v: Float) = if (v < 0.04f) 0.001f else if (v > 0.96f) 0.999f else v
-                    if (dist < 0.03f && dur < 400) {
-                        j.put("t", "tap").put("x", a.first.toDouble()).put("y", a.second.toDouble())
-                    } else {
-                        j.put("t", "swipe")
-                            .put("x1", snap(a.first).toDouble()).put("y1", snap(a.second).toDouble())
-                            .put("x2", b.first.toDouble()).put("y2", b.second.toDouble())
-                            .put("d", dur.coerceIn(60L, 3000L))
+            MotionEvent.ACTION_DOWN -> {
+                downX = e.x
+                downY = e.y
+                downT = e.eventTime
+                streaming = false
+            }
+            MotionEvent.ACTION_MOVE -> {
+                // Once the finger really moves, stream it live so the other phone follows with no waiting.
+                if (!streaming && hypot(e.x - downX, e.y - downY) > dp(10)) {
+                    val a = norm(downX, downY, v)
+                    if (a != null) {
+                        session.sendCtl(JSONObject().put("t", "ts").put("x", edge(a.first).toDouble()).put("y", edge(a.second).toDouble()))
+                        streaming = true
+                        lastMoveT = 0L
                     }
-                    AppState.session?.sendCtl(j)
+                }
+                if (streaming && e.eventTime - lastMoveT >= 16) {
+                    val b = norm(e.x, e.y, v)
+                    if (b != null) {
+                        lastNx = b.first
+                        lastNy = b.second
+                        lastMoveT = e.eventTime
+                        session.sendCtl(JSONObject().put("t", "tm").put("x", b.first.toDouble()).put("y", b.second.toDouble()))
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (streaming) {
+                    streaming = false
+                    val b = norm(e.x, e.y, v)
+                    val fx = b?.first ?: lastNx
+                    val fy = b?.second ?: lastNy
+                    session.sendCtl(JSONObject().put("t", "te").put("x", fx.toDouble()).put("y", fy.toDouble()))
+                } else if (e.actionMasked == MotionEvent.ACTION_UP) {
+                    val a = norm(downX, downY, v)
+                    if (a != null) {
+                        val dur = e.eventTime - downT
+                        val j = JSONObject()
+                        if (dur < 400) {
+                            j.put("t", "tap").put("x", a.first.toDouble()).put("y", a.second.toDouble())
+                        } else { // long press
+                            j.put("t", "swipe")
+                                .put("x1", a.first.toDouble()).put("y1", a.second.toDouble())
+                                .put("x2", a.first.toDouble()).put("y2", a.second.toDouble())
+                                .put("d", dur.coerceIn(400L, 3000L))
+                        }
+                        session.sendCtl(j)
+                    }
                 }
             }
         }
@@ -600,4 +664,42 @@ class MainActivity : Activity() {
             9 -> render()
         }
     }
+}
+
+/** A microphone icon drawn in code (white). When muted it gets a slash, like on a call screen. */
+class MicDrawable(private val sizePx: Int, private val muted: Boolean, private val underlay: Int) : android.graphics.drawable.Drawable() {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+    override fun getIntrinsicWidth() = sizePx
+    override fun getIntrinsicHeight() = sizePx
+
+    override fun draw(c: android.graphics.Canvas) {
+        val b = bounds
+        val cx = b.exactCenterX()
+        val cy = b.exactCenterY()
+        val u = minOf(b.width(), b.height()) / 24f
+        paint.color = Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        c.drawRoundRect(cx - 3.5f * u, cy - 10f * u, cx + 3.5f * u, cy + 3f * u, 3.5f * u, 3.5f * u, paint)
+        paint.style = android.graphics.Paint.Style.STROKE
+        paint.strokeCap = android.graphics.Paint.Cap.ROUND
+        paint.strokeWidth = 2f * u
+        c.drawArc(cx - 7f * u, cy - 6.5f * u, cx + 7f * u, cy + 7.5f * u, 0f, 180f, false, paint)
+        c.drawLine(cx, cy + 7.5f * u, cx, cy + 10f * u, paint)
+        c.drawLine(cx - 3.5f * u, cy + 10f * u, cx + 3.5f * u, cy + 10f * u, paint)
+        if (muted) {
+            paint.color = underlay
+            paint.strokeWidth = 5f * u
+            c.drawLine(cx - 9f * u, cy - 10f * u, cx + 9f * u, cy + 10f * u, paint)
+            paint.color = Color.WHITE
+            paint.strokeWidth = 2.2f * u
+            c.drawLine(cx - 9f * u, cy - 10f * u, cx + 9f * u, cy + 10f * u, paint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) { paint.colorFilter = cf }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
 }
