@@ -15,7 +15,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="RemoteAssist"
+        android:label="Remote Assist"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity
@@ -38,7 +38,7 @@
         <service
             android:name=".ControlService"
             android:exported="true"
-            android:label="RemoteAssist remote control"
+            android:label="Remote Assist remote control"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />

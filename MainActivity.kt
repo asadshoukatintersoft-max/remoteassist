@@ -205,7 +205,7 @@ class MainActivity : Activity() {
         val logo = ImageView(this)
         logo.setImageResource(R.drawable.ic_launcher)
         c.addView(logo, LinearLayout.LayoutParams(dp(104), dp(104)).also { it.gravity = Gravity.CENTER_HORIZONTAL })
-        c.addView(text("RemoteAssist", 30f, true, BLUE, center = true))
+        c.addView(text("Remote Assist", 30f, true, BLUE, center = true))
         c.addView(text("Get help on your phone, or help someone else. Free, private, no account needed.", 16f, center = true))
         c.addView(text("Both people need this app.", 14f, color = GREY, center = true))
         c.addView(spacer(16))
@@ -262,7 +262,7 @@ class MainActivity : Activity() {
         if (!batteryOk()) c.addView(button("Allow background use", BLUE) {
             try {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-            } catch (e: Exception) { toast("Open Settings > Apps > RemoteAssist > Battery > Unrestricted") }
+            } catch (e: Exception) { toast("Open Settings > Apps > Remote Assist > Battery > Unrestricted") }
         })
 
         if (Config.CONTROL_ENABLED) {
@@ -270,7 +270,7 @@ class MainActivity : Activity() {
         c.addView(text("Only needed on the phone that is being helped, and only if you want your helper to tap for you. It stays inactive until you press \"Give control\"."))
         if (!a11yOn()) {
             c.addView(button("Turn on remote control", BLUE) { openAccessibility() })
-            c.addView(text("If Android says \"Restricted setting\": go to Settings > Apps > RemoteAssist, tap the ⋮ menu (top right), choose \"Allow restricted settings\", then try again.", 14f, color = GREY))
+            c.addView(text("If Android says \"Restricted setting\": go to Settings > Apps > Remote Assist, tap the ⋮ menu (top right), choose \"Allow restricted settings\", then try again.", 14f, color = GREY))
             c.addView(button("Open App info", GREY) {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             })
@@ -282,7 +282,7 @@ class MainActivity : Activity() {
         return scroll(c)
     }
 
-    /** Opens the exact settings page for RemoteAssist when the phone supports it, else the general list. */
+    /** Opens the exact settings page for Remote Assist when the phone supports it, else the general list. */
     private fun openAccessibility() {
         try {
             if (Build.VERSION.SDK_INT >= 34) {
@@ -299,7 +299,7 @@ class MainActivity : Activity() {
     private fun askForControlSetup(thenContinue: () -> Unit) {
         AlertDialog.Builder(this)
             .setTitle("One quick step")
-            .setMessage("To let your helper tap on your phone, turn on \"RemoteAssist\" in the page that opens next:\n\n1. Tap the RemoteAssist switch (ON)\n2. Tap Allow / OK\n3. Come back to this app\n\nIf the switch is greyed out: open App info > ⋮ menu > Allow restricted settings, then try again.")
+            .setMessage("To let your helper tap on your phone, turn on \"Remote Assist\" in the page that opens next:\n\n1. Tap the Remote Assist switch (ON)\n2. Tap Allow / OK\n3. Come back to this app\n\nIf the switch is greyed out: open App info > ⋮ menu > Allow restricted settings, then try again.")
             .setPositiveButton("Open settings") { _, _ -> openAccessibility() }
             .setNeutralButton("App info") { _, _ ->
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
@@ -311,7 +311,7 @@ class MainActivity : Activity() {
     private fun joinView(): View {
         val c = column()
         c.addView(text("Join a session", 26f, true, GREEN))
-        c.addView(text("Ask the person you're helping to open RemoteAssist, tap \"I need help\", and read you the ${Config.CODE_LENGTH}-digit code."))
+        c.addView(text("Ask the person you're helping to open Remote Assist, tap \"I need help\", and read you the ${Config.CODE_LENGTH}-digit code."))
         val et = EditText(this)
         et.inputType = InputType.TYPE_CLASS_NUMBER
         et.hint = "1".repeat(Config.CODE_LENGTH).replace(Regex("1"), "•")
@@ -344,11 +344,11 @@ class MainActivity : Activity() {
             Phase.WAITING_FOR_HELPER -> {
                 c.addView(text("Your session code", 22f, true, BLUE))
                 c.addView(text(spaced(AppState.code), 56f, true, 0xFF000000.toInt(), center = true))
-                c.addView(text("Tell this code to your helper. They open RemoteAssist, tap \"I'm helping someone\" and type it in.\n\nOnly share it with someone you trust. It expires in ${Config.CODE_VALID_MIN} minutes."))
+                c.addView(text("Tell this code to your helper. They open Remote Assist, tap \"I'm helping someone\" and type it in.\n\nOnly share it with someone you trust. It expires in ${Config.CODE_VALID_MIN} minutes."))
                 c.addView(button("Send code", BLUE) {
                     val i = Intent(Intent.ACTION_SEND)
                     i.type = "text/plain"
-                    i.putExtra(Intent.EXTRA_TEXT, "Open RemoteAssist, tap \"I'm helping someone\", and enter this code: ${spaced(AppState.code)}")
+                    i.putExtra(Intent.EXTRA_TEXT, "Open Remote Assist, tap \"I'm helping someone\", and enter this code: ${spaced(AppState.code)}")
                     startActivity(Intent.createChooser(i, "Send code"))
                 })
                 c.addView(button("Cancel", RED) { AppState.session?.end("You cancelled.") ?: AppState.reset() })
@@ -362,7 +362,7 @@ class MainActivity : Activity() {
             else -> { // LIVE
                 c.addView(text("Sharing your screen", 22f, true, GREEN))
                 if (AppState.message.isNotBlank()) c.addView(text(AppState.message, 14f, color = RED))
-                c.addView(text("Use your phone normally. To return here, tap the RemoteAssist notification.", 13f, color = GREY))
+                c.addView(text("Use your phone normally. To return here, tap the Remote Assist notification.", 13f, color = GREY))
                 if (Config.CONTROL_ENABLED) {
                 if (AppState.controlGranted) {
                     c.addView(text("Your helper is controlling your phone right now. Please don't touch the screen.", 17f, true, RED))

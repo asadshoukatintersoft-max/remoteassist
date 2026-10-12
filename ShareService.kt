@@ -157,11 +157,11 @@ class ShareService : Service() {
             Phase.LIVE -> {
                 title = if (owner) "Sharing your screen" else "Connected to a session"
                 text = if (owner && AppState.controlGranted) "Your helper has control. Tap to open."
-                else "Tap to open RemoteAssist."
+                else "Tap to open Remote Assist."
             }
             Phase.WAITING_FOR_HELPER -> { title = "Waiting for your helper"; text = "Code: " + AppState.code.chunked(4).joinToString(" ") }
             Phase.WAITING_APPROVAL -> { title = "Someone joined"; text = "Open the app to allow or decline." }
-            else -> { title = "RemoteAssist"; text = "Connecting…" }
+            else -> { title = "Remote Assist"; text = "Connecting…" }
         }
         val icon = Icon.createWithResource(this, R.drawable.ic_stat)
         val b = Notification.Builder(this, "session")
