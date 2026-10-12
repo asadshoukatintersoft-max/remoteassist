@@ -433,8 +433,10 @@ class MainActivity : Activity() {
         outer.orientation = LinearLayout.VERTICAL
         outer.setBackgroundColor(Color.BLACK)
 
-        val status = text("", 12f, color = Color.WHITE)
-        status.setPadding(dp(10), dp(2), dp(10), dp(2))
+        val status = text("", 11f, color = Color.WHITE)
+        status.setPadding(dp(8), 0, dp(8), 0)
+        status.maxLines = 1
+        status.ellipsize = android.text.TextUtils.TruncateAt.END
         liveStatus = status
         outer.addView(status, LinearLayout.LayoutParams(MATCH, WRAP))
 
@@ -469,12 +471,13 @@ class MainActivity : Activity() {
 
     /** Refreshes the status line and the button bar without touching the video view. */
     private fun updateLive() {
-        val base = when {
+        // One short line only, so the screen gets all the room.
+        liveStatus?.text = when {
             AppState.message.isNotBlank() -> AppState.message
-            AppState.controlGranted -> "You are in control. Tap and swipe on the screen."
-            else -> "Watching. Talk to guide them."
+            AppState.net.isNotBlank() -> (if (AppState.controlGranted) "In control \u00b7 " else "Watching \u00b7 ") + AppState.net.trimStart(' ', '\u00b7')
+            AppState.controlGranted -> "In control"
+            else -> "Watching"
         }
-        liveStatus?.text = if (AppState.net.isBlank()) base else "$base   [${AppState.net}]"
         val bar = liveBar ?: return
         bar.removeAllViews()
         fun newRow(): LinearLayout {

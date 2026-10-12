@@ -38,15 +38,15 @@ object Config {
      */
     const val TURN_API_URL = ""
 
-    // ---- Video quality. Level 2 (Sharp) is always used; the lower levels are kept only for experiments.
+    // ---- Video quality. Level 1 (720p) is always used as the starting size.
     //      Levels:            Fast     Normal     Sharp
     val Q_NAMES = listOf("Fast", "Normal", "Sharp")
     val Q_SHORT_SIDE = intArrayOf(540, 720, 1080)           // pixels on the short side of the shared screen
     val Q_MAX_BITRATE = intArrayOf(1_200_000, 2_500_000, 4_000_000)
-    const val DEFAULT_QUALITY = 2   // full-HD: the best picture; WebRTC lowers it automatically if the network or phone cannot keep up
+    const val DEFAULT_QUALITY = 1   // 720p: sharp text and icons, light enough to stay smooth. The app shrinks it automatically on a weak connection.
     const val FPS = 30
-    const val MIN_BITRATE = 100_000
-    /** VP8 works smoothly on every phone. Hardware H.264 can stutter on some phones, so it is off. */
+    const val MIN_BITRATE = 200_000
+    /** VP8 has no encoder delay, which keeps screen mirroring responsive. (Hardware H.264 buffers several frames.) */
     const val PREFER_H264 = false
 
     /** Digits in the session code. 4 is easy to read out; 6 is safer. */

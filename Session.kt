@@ -62,6 +62,12 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private var lostTimeout: Runnable? = null
     private var netPoll: Runnable? = null
     private var remoteAudio: AudioTrack? = null
+    private var ownerPoll: Runnable? = null
+    private var scaleStep = 0
+    private var lowCount = 0
+    private var highCount = 0
+    private var lastBytes = -1.0
+    private var lastBytesT = 0L
     private var lastFrames = -1.0
     private var lastFramesT = 0L
 
@@ -91,8 +97,10 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
 
             val (w, h) = captureSize(AppState.quality)
 
-            // false = "camera mode": WebRTC may lower the picture size (never the smoothness) when the network is slow.
-            videoSource = Rtc.factory.createVideoSource(false)
+            // true = "screen content" mode: crisp text and icons, no denoising/blurring, no surprise resizing.
+            videoSource = Rtc.factory.createVideoSource(true)
+            // Drop surplus frames right at the source (many phones draw 90-120 times a second).
+            videoSource!!.adaptOutputFormat(w, h, Config.FPS)
             texHelper = SurfaceTextureHelper.create("capture", Rtc.egl.eglBaseContext)
             capturer = ScreenCapturerAndroid(data, object : MediaProjection.Callback() {
                 override fun onStop() {
@@ -110,8 +118,8 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
 
             p.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(d: SessionDescription?) {
-                    val d2 = if (d != null && Config.PREFER_H264)
-                        SessionDescription(d.type, preferH264(d.description)) else d
+                    val d2 = if (d != null)
+                        SessionDescription(d.type, preferCodec(d.description, if (Config.PREFER_H264) "H264" else "VP8")) else d
                     p.setLocalDescription(SdpAdapter(), d2)
                     main.post { waitGather { sendSdp("O") } }
                 }
@@ -344,6 +352,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         if (closed) return
         everConnected = true
         startNetPoll()
+        startOwnerPoll()
         connectTimeout?.let { main.removeCallbacks(it) }
         waitTimeout?.let { main.removeCallbacks(it) }
         useSpeaker(true)
@@ -415,11 +424,11 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     // ---------------------------------------------------------------- quality
 
     /** Reorders the video codecs so hardware H.264 is tried first (falls back to VP8 automatically). */
-    private fun preferH264(sdp: String): String {
+    private fun preferCodec(sdp: String, codec: String): String {
         val lines = sdp.split("\r\n").toMutableList()
         val mIdx = lines.indexOfFirst { it.startsWith("m=video") }
         if (mIdx < 0) return sdp
-        val h264 = lines.filter { it.startsWith("a=rtpmap:") && it.contains(" H264/") }
+        val h264 = lines.filter { it.startsWith("a=rtpmap:") && it.contains(" $codec/") }
             .map { it.substringAfter("a=rtpmap:").substringBefore(" ") }
         if (h264.isEmpty()) return sdp
         val parts = lines[mIdx].split(" ")
@@ -443,10 +452,6 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         if (role != Role.OWNER) return
         val l = level.coerceIn(0, Config.Q_NAMES.size - 1)
         AppState.quality = l
-        try {
-            val (w, h) = captureSize(l)
-            capturer?.changeCaptureFormat(w, h, Config.FPS)
-        } catch (_: Exception) {}
         tuneVideo()
         AppState.changed()
     }
@@ -471,9 +476,10 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                     e.maxBitrateBps = maxBr
                     e.minBitrateBps = Config.MIN_BITRATE
                     e.maxFramerate = Config.FPS
-                    e.scaleResolutionDownBy = 1.0
+                    e.scaleResolutionDownBy = SCALES[scaleStep.coerceIn(0, SCALES.size - 1)]
                 }
-                p.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+                // Keep the picture sharp; the step ladder below lowers the size first when the network is weak.
+                p.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
                 s.setParameters(p)
             }
         } catch (_: Exception) {}
@@ -481,6 +487,63 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     }
 
     // ---------------------------------------------------------------- actions
+
+    // ----------------------------------------------- owner: automatic picture size
+
+    private val SCALES = doubleArrayOf(1.0, 1.35, 1.7)
+
+    private fun startOwnerPoll() {
+        if (role != Role.OWNER || ownerPoll != null) return
+        val r = object : Runnable {
+            override fun run() {
+                if (closed) return
+                pollOwner()
+                main.postDelayed(this, 2000L)
+            }
+        }
+        ownerPoll = r
+        main.postDelayed(r, 3000L)
+    }
+
+    /** Reads how much the connection can carry right now, then picks the sharpest picture size it can keep smooth. */
+    private fun pollOwner() {
+        val p = pc ?: return
+        p.getStats { report ->
+            var est = -1.0
+            try {
+                val map = report.statsMap
+                val tr = map.values.firstOrNull { it.type == "transport" && it.members["selectedCandidatePairId"] != null }
+                var pair = if (tr != null) map[tr.members["selectedCandidatePairId"] as? String ?: ""] else null
+                if (pair == null) {
+                    pair = map.values.firstOrNull { it.type == "candidate-pair" && it.members["nominated"] == true && it.members["state"] == "succeeded" }
+                }
+                est = (pair?.members?.get("availableOutgoingBitrate") as? Number)?.toDouble() ?: -1.0
+            } catch (_: Exception) {
+            }
+            if (est > 0) main.post { adaptScale(est) }
+        }
+    }
+
+    private fun stepFor(est: Double): Int = if (est >= 1_500_000) 0 else if (est >= 850_000) 1 else 2
+
+    private fun adaptScale(est: Double) {
+        if (closed) return
+        val want = stepFor(est)
+        if (want > scaleStep) {
+            // weaker connection: shrink the picture quickly so it stays smooth
+            lowCount++
+            highCount = 0
+            if (lowCount >= 2) { scaleStep = want; lowCount = 0; tuneVideo() }
+        } else if (want < scaleStep && est >= (if (scaleStep == 1) 1_900_000.0 else 1_100_000.0)) {
+            // clearly stronger connection: grow back slowly, one step at a time
+            highCount++
+            lowCount = 0
+            if (highCount >= 4) { scaleStep -= 1; highCount = 0; tuneVideo() }
+        } else {
+            lowCount = 0
+            highCount = 0
+        }
+    }
 
     // ----------------------------------------------- connection info (helper side)
 
@@ -520,22 +583,30 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                     link = (if (relay) "Relay" else "Direct") + (if (relay && proto.isNotEmpty()) "/$proto" else "")
                     if (rtt != null) link += " ${(rtt * 1000).toInt()} ms"
                 }
-                // picture: frames per second and size actually received
+                // picture: frames per second, size and speed actually received
                 var pic = ""
                 val inb = map.values.firstOrNull { it.type == "inbound-rtp" && (it.members["kind"] == "video" || it.members["mediaType"] == "video") }
                 if (inb != null) {
                     val frames = (inb.members["framesDecoded"] as? Number)?.toDouble()
+                    val bytes = (inb.members["bytesReceived"] as? Number)?.toDouble()
                     val now = System.currentTimeMillis()
                     var fps = -1
+                    var mbps = -1.0
                     if (frames != null) {
                         if (lastFrames >= 0 && now > lastFramesT) fps = Math.round((frames - lastFrames) * 1000.0 / (now - lastFramesT)).toInt()
                         lastFrames = frames
                         lastFramesT = now
                     }
+                    if (bytes != null) {
+                        if (lastBytes >= 0 && now > lastBytesT) mbps = (bytes - lastBytes) * 8.0 / ((now - lastBytesT) * 1000.0)
+                        lastBytes = bytes
+                        lastBytesT = now
+                    }
                     val w = (inb.members["frameWidth"] as? Number)?.toInt()
                     val h = (inb.members["frameHeight"] as? Number)?.toInt()
-                    if (fps >= 0) pic += " · $fps fps"
-                    if (w != null && h != null && w > 0) pic += " · ${minOf(w, h)}p"
+                    if (fps >= 0) pic += " \u00b7 $fps fps"
+                    if (w != null && h != null && w > 0) pic += " \u00b7 ${minOf(w, h)}p"
+                    if (mbps >= 0) pic += " \u00b7 " + String.format(java.util.Locale.US, "%.1f", mbps) + " Mb"
                 }
                 text = link + pic
             } catch (_: Exception) {
@@ -631,6 +702,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         connectTimeout?.let { main.removeCallbacks(it) }
         lostTimeout?.let { main.removeCallbacks(it) }
         netPoll?.let { main.removeCallbacks(it) }
+        ownerPoll?.let { main.removeCallbacks(it) }
         useSpeaker(false)
         try { signaling?.stop() } catch (_: Exception) {}
         try { setSink(null) } catch (_: Exception) {}
