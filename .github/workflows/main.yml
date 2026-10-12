@@ -19,7 +19,7 @@ jobs:
           set -e
           J=app/src/main/java/com/remoteassist/fyp
           mkdir -p $J app/src/main/res/values app/src/main/res/xml app/src/main/res/drawable
-          for f in AppState Config ControlService Crypto MainActivity Rtc Session ShareService Signaling; do
+          for f in AppState Config ControlService Crypto MainActivity Rtc Session ShareService Signaling DeviceInfo Lang; do
             [ -f "$f.kt" ] && mv "$f.kt" $J/
           done
           mv AndroidManifest.xml app/src/main/
