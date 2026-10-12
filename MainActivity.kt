@@ -197,16 +197,36 @@ class MainActivity : Activity() {
     // ------------------------------------------------------------- screens
 
     private fun homeView(): View {
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+
         val c = column()
-        c.addView(text("RemoteAssist", 30f, true, BLUE))
-        c.addView(text("Get help on your phone, or help someone else. Free, private, no account needed.", 16f))
-        c.addView(text("Both people need this app.", 14f, color = GREY))
-        c.addView(spacer(24))
+        c.gravity = Gravity.CENTER_HORIZONTAL
+        val logo = ImageView(this)
+        logo.setImageResource(R.drawable.ic_launcher)
+        c.addView(logo, LinearLayout.LayoutParams(dp(104), dp(104)).also { it.gravity = Gravity.CENTER_HORIZONTAL })
+        c.addView(text("RemoteAssist", 30f, true, BLUE, center = true))
+        c.addView(text("Get help on your phone, or help someone else. Free, private, no account needed.", 16f, center = true))
+        c.addView(text("Both people need this app.", 14f, color = GREY, center = true))
+        c.addView(spacer(16))
         c.addView(button("I need help\n(share my screen)", BLUE) { startOwnerFlow() })
         c.addView(button("I'm helping someone\n(join with a code)", GREEN) { screen = Screen.JOIN; render() })
         c.addView(spacer(12))
         c.addView(button("Setup check (do this once)", GREY) { screen = Screen.SETUP; render() })
-        return scroll(c)
+        outer.addView(scroll(c), LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        val foot = LinearLayout(this)
+        foot.orientation = LinearLayout.VERTICAL
+        foot.gravity = Gravity.CENTER_HORIZONTAL
+        foot.setPadding(dp(16), dp(6), dp(16), dp(14))
+        val l1 = text("Powered by OsamaX", 12f, true, 0xFF78909C.toInt(), center = true)
+        l1.setPadding(0, dp(2), 0, 0)
+        val l2 = text("\u00A9 2026 OsamaX. All rights reserved.", 11f, false, 0xFF90A4AE.toInt(), center = true)
+        l2.setPadding(0, 0, 0, 0)
+        foot.addView(l1)
+        foot.addView(l2)
+        outer.addView(foot, LinearLayout.LayoutParams(MATCH, WRAP))
+        return outer
     }
 
     private fun spacer(h: Int): View {
@@ -358,21 +378,42 @@ class MainActivity : Activity() {
                     if (!a11yOn()) c.addView(text("Remote control is not turned on yet. Tap the button above and follow the steps, or see \"Setup check\" on the start screen.", 14f, color = GREY))
                 }
                 }
-                c.addView(micTextButton())
+                c.addView(audioRow())
                 c.addView(button("Stop sharing", RED) { AppState.session?.end("You stopped sharing.") })
             }
         }
         return scroll(c)
     }
 
-    /** Big mic button for the phone owner: icon plus a short label. */
-    private fun micTextButton(): Button {
-        val b = button(if (AppState.micMuted) "Unmute microphone" else "Mute microphone", if (AppState.micMuted) RED else GREY) {
-            AppState.session?.setMic(AppState.micMuted)
-        }
-        b.setCompoundDrawablesWithIntrinsicBounds(MicDrawable(dp(24), AppState.micMuted, RED), null, null, null)
-        b.compoundDrawablePadding = dp(8)
+    /** A round icon button (like a call screen). */
+    private fun roundIcon(d: android.graphics.drawable.Drawable, bg: Int, sizeDp: Int, desc: String, onClick: () -> Unit): ImageButton {
+        val b = ImageButton(this)
+        b.setImageDrawable(d)
+        b.scaleType = ImageView.ScaleType.CENTER
+        val g = GradientDrawable()
+        g.setColor(bg)
+        g.cornerRadius = dp(sizeDp).toFloat()
+        b.background = g
+        b.contentDescription = desc
+        b.setOnClickListener { onClick() }
         return b
+    }
+
+    /** Owner: big microphone and speaker icons, grey = on, red with a slash = off. */
+    private fun audioRow(): View {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(0, dp(10), 0, dp(10))
+        val mic = roundIcon(MicDrawable(dp(30), AppState.micMuted, RED), if (AppState.micMuted) RED else GREY, 64,
+            if (AppState.micMuted) "Unmute microphone" else "Mute microphone") { AppState.session?.setMic(AppState.micMuted) }
+        val spk = roundIcon(SpeakerDrawable(dp(30), AppState.speakerMuted, RED), if (AppState.speakerMuted) RED else GREY, 64,
+            if (AppState.speakerMuted) "Unmute speaker" else "Mute speaker") { AppState.session?.setSpeaker(AppState.speakerMuted) }
+        val lp1 = LinearLayout.LayoutParams(dp(64), dp(64)); lp1.setMargins(dp(14), 0, dp(14), 0)
+        val lp2 = LinearLayout.LayoutParams(dp(64), dp(64)); lp2.setMargins(dp(14), 0, dp(14), 0)
+        row.addView(mic, lp1)
+        row.addView(spk, lp2)
+        return row
     }
 
     private fun helperView(phase: Phase): View {
@@ -415,7 +456,7 @@ class MainActivity : Activity() {
         outer.addView(frame, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         val bar = LinearLayout(this)
-        bar.orientation = LinearLayout.HORIZONTAL
+        bar.orientation = LinearLayout.VERTICAL
         bar.setBackgroundColor(0xFF111111.toInt())
         bar.setPadding(dp(4), dp(2), dp(4), dp(2))
         liveBar = bar
@@ -436,7 +477,13 @@ class MainActivity : Activity() {
         liveStatus?.text = if (AppState.net.isBlank()) base else "$base   [${AppState.net}]"
         val bar = liveBar ?: return
         bar.removeAllViews()
-        fun add(label: String, color: Int, onClick: () -> Unit) {
+        fun newRow(): LinearLayout {
+            val r = LinearLayout(this)
+            r.orientation = LinearLayout.HORIZONTAL
+            bar.addView(r, LinearLayout.LayoutParams(MATCH, WRAP))
+            return r
+        }
+        fun add(row: LinearLayout, label: String, color: Int, onClick: () -> Unit) {
             val b = button(label, color, onClick)
             b.textSize = 12f
             b.minHeight = 0
@@ -444,36 +491,45 @@ class MainActivity : Activity() {
             b.minWidth = 0
             b.minimumWidth = 0
             b.setPadding(dp(4), dp(8), dp(4), dp(8))
-            val lp = LinearLayout.LayoutParams(0, WRAP, 1f)
+            val lp = LinearLayout.LayoutParams(0, dp(40), 1f)
             lp.setMargins(dp(2), dp(2), dp(2), dp(2))
             b.layoutParams = lp
-            bar.addView(b)
+            row.addView(b)
         }
-        // Microphone: icon button (grey = on, red with a slash = muted), like a call screen
-        val mic = ImageButton(this)
-        mic.setImageDrawable(MicDrawable(dp(24), AppState.micMuted, RED))
-        mic.scaleType = ImageView.ScaleType.CENTER
-        val micBg = GradientDrawable()
-        micBg.setColor(if (AppState.micMuted) RED else GREY)
-        micBg.cornerRadius = dp(14).toFloat()
-        mic.background = micBg
-        mic.contentDescription = if (AppState.micMuted) "Unmute microphone" else "Mute microphone"
-        mic.setOnClickListener { AppState.session?.setMic(AppState.micMuted) }
-        val micLp = LinearLayout.LayoutParams(0, dp(40), 1f)
-        micLp.setMargins(dp(2), dp(2), dp(2), dp(2))
-        bar.addView(mic, micLp)
+        fun addIcon(row: LinearLayout, d: android.graphics.drawable.Drawable, bg: Int, desc: String, onClick: () -> Unit) {
+            val b = roundIcon(d, bg, 14, desc, onClick)
+            val g = GradientDrawable()
+            g.setColor(bg)
+            g.cornerRadius = dp(14).toFloat()
+            b.background = g
+            val lp = LinearLayout.LayoutParams(0, dp(40), 1f)
+            lp.setMargins(dp(2), dp(2), dp(2), dp(2))
+            row.addView(b, lp)
+        }
+        // Row 1: microphone, speaker, picture quality, end
+        val r1 = newRow()
+        addIcon(r1, MicDrawable(dp(24), AppState.micMuted, RED), if (AppState.micMuted) RED else GREY,
+            if (AppState.micMuted) "Unmute microphone" else "Mute microphone") { AppState.session?.setMic(AppState.micMuted) }
+        addIcon(r1, SpeakerDrawable(dp(24), AppState.speakerMuted, RED), if (AppState.speakerMuted) RED else GREY,
+            if (AppState.speakerMuted) "Unmute speaker" else "Mute speaker") { AppState.session?.setSpeaker(AppState.speakerMuted) }
+        val q = AppState.quality.coerceIn(0, Config.Q_NAMES.size - 1)
+        add(r1, "Quality: ${Config.Q_NAMES[q]}", 0xFF5E35B1.toInt()) {
+            AppState.session?.setQuality((AppState.quality + 1) % Config.Q_NAMES.size)
+        }
+        add(r1, "End", RED) { AppState.session?.end("You left the session.") }
+        // Row 2: phone controls
         if (Config.CONTROL_ENABLED) {
+            val r2 = newRow()
             if (AppState.controlGranted) {
-                add("Back", BLUE) { navKey("back") }
-                add("Home", BLUE) { navKey("home") }
-                add("Apps", BLUE) { navKey("recents") }
-                add("Panel", BLUE) { navKey("notif") }
-                add("Type", GREEN) { askTypeText() }
+                add(r2, "Back", BLUE) { navKey("back") }
+                add(r2, "Home", BLUE) { navKey("home") }
+                add(r2, "Apps", BLUE) { navKey("recents") }
+                add(r2, "Panel", BLUE) { navKey("notif") }
+                add(r2, "Type", GREEN) { askTypeText() }
             } else {
-                add("Ask control", BLUE) { AppState.session?.requestControl() }
+                add(r2, "Ask for control", BLUE) { AppState.session?.requestControl() }
             }
         }
-        add("End", RED) { AppState.session?.end("You left the session.") }
     }
 
     // ------------------------------------------------- helper: touch → phone
@@ -688,6 +744,54 @@ class MicDrawable(private val sizePx: Int, private val muted: Boolean, private v
         c.drawLine(cx, cy + 7.5f * u, cx, cy + 10f * u, paint)
         c.drawLine(cx - 3.5f * u, cy + 10f * u, cx + 3.5f * u, cy + 10f * u, paint)
         if (muted) {
+            paint.color = underlay
+            paint.strokeWidth = 5f * u
+            c.drawLine(cx - 9f * u, cy - 10f * u, cx + 9f * u, cy + 10f * u, paint)
+            paint.color = Color.WHITE
+            paint.strokeWidth = 2.2f * u
+            c.drawLine(cx - 9f * u, cy - 10f * u, cx + 9f * u, cy + 10f * u, paint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) { paint.alpha = alpha }
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) { paint.colorFilter = cf }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+}
+
+/** A speaker icon drawn in code (white). When muted it loses its sound waves and gets a slash. */
+class SpeakerDrawable(private val sizePx: Int, private val muted: Boolean, private val underlay: Int) : android.graphics.drawable.Drawable() {
+    private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+
+    override fun getIntrinsicWidth() = sizePx
+    override fun getIntrinsicHeight() = sizePx
+
+    override fun draw(c: android.graphics.Canvas) {
+        val b = bounds
+        val cx = b.exactCenterX()
+        val cy = b.exactCenterY()
+        val u = minOf(b.width(), b.height()) / 24f
+        paint.color = Color.WHITE
+        paint.style = android.graphics.Paint.Style.FILL
+        val p = android.graphics.Path()
+        p.moveTo(cx - 9f * u, cy - 3.5f * u)
+        p.lineTo(cx - 4.5f * u, cy - 3.5f * u)
+        p.lineTo(cx + 0.5f * u, cy - 7.5f * u)
+        p.lineTo(cx + 0.5f * u, cy + 7.5f * u)
+        p.lineTo(cx - 4.5f * u, cy + 3.5f * u)
+        p.lineTo(cx - 9f * u, cy + 3.5f * u)
+        p.close()
+        c.drawPath(p, paint)
+        if (!muted) {
+            paint.style = android.graphics.Paint.Style.STROKE
+            paint.strokeCap = android.graphics.Paint.Cap.ROUND
+            paint.strokeWidth = 2f * u
+            c.drawArc(cx - 4.5f * u, cy - 5f * u, cx + 5.5f * u, cy + 5f * u, -50f, 100f, false, paint)
+            c.drawArc(cx - 8f * u, cy - 9f * u, cx + 9f * u, cy + 9f * u, -50f, 100f, false, paint)
+        } else {
+            paint.style = android.graphics.Paint.Style.STROKE
+            paint.strokeCap = android.graphics.Paint.Cap.ROUND
             paint.color = underlay
             paint.strokeWidth = 5f * u
             c.drawLine(cx - 9f * u, cy - 10f * u, cx + 9f * u, cy + 10f * u, paint)

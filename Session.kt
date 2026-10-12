@@ -61,6 +61,9 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private var everConnected = false
     private var lostTimeout: Runnable? = null
     private var netPoll: Runnable? = null
+    private var remoteAudio: AudioTrack? = null
+    private var lastFrames = -1.0
+    private var lastFramesT = 0L
 
     // ---------------------------------------------------------------- start
 
@@ -86,12 +89,10 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
             dc!!.registerObserver(dcObserver)
             addAudio()
 
-            val (sw, sh) = realScreenSize(ctx)
-            val scale = minOf(1f, Config.MAX_SHORT_SIDE.toFloat() / minOf(sw, sh))
-            val w = (sw * scale).toInt() / 2 * 2
-            val h = (sh * scale).toInt() / 2 * 2
+            val (w, h) = captureSize(AppState.quality)
 
-            videoSource = Rtc.factory.createVideoSource(true)
+            // false = "camera mode": WebRTC may lower the picture size (never the smoothness) when the network is slow.
+            videoSource = Rtc.factory.createVideoSource(false)
             texHelper = SurfaceTextureHelper.create("capture", Rtc.egl.eglBaseContext)
             capturer = ScreenCapturerAndroid(data, object : MediaProjection.Callback() {
                 override fun onStop() {
@@ -305,6 +306,9 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
             if (t is VideoTrack) {
                 remoteVideo = t
                 sink?.let { t.addSink(it) }
+            } else if (t is AudioTrack) {
+                remoteAudio = t
+                t.setEnabled(!AppState.speakerMuted)
             }
         }
     }
@@ -367,6 +371,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 AppState.message = if (AppState.controlGranted) "" else "Control was taken back. You are watching only."
                 AppState.changed()
             }
+            "q" -> if (role == Role.OWNER) applyQuality(j.optInt("v", Config.DEFAULT_QUALITY))
             "req" -> if (role == Role.OWNER) {
                 AppState.controlRequested = true
                 AppState.changed()
@@ -425,15 +430,45 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         return lines.joinToString("\r\n")
     }
 
-    /** Lifts WebRTC's conservative default limits so text on the shared screen stays sharp and smooth. */
+    /** Size of the shared picture for a quality level (always the full screen shape). */
+    private fun captureSize(level: Int): Pair<Int, Int> {
+        val l = level.coerceIn(0, Config.Q_NAMES.size - 1)
+        val (sw, sh) = realScreenSize(ctx)
+        val scale = minOf(1f, Config.Q_SHORT_SIDE[l].toFloat() / minOf(sw, sh))
+        return Pair((sw * scale).toInt() / 2 * 2, (sh * scale).toInt() / 2 * 2)
+    }
+
+    /** Owner: switch to another quality level while the session runs. */
+    fun applyQuality(level: Int) {
+        if (role != Role.OWNER) return
+        val l = level.coerceIn(0, Config.Q_NAMES.size - 1)
+        AppState.quality = l
+        try {
+            val (w, h) = captureSize(l)
+            capturer?.changeCaptureFormat(w, h, Config.FPS)
+        } catch (_: Exception) {}
+        tuneVideo()
+        AppState.changed()
+    }
+
+    /** Helper: ask the other phone to change the picture quality. */
+    fun setQuality(level: Int) {
+        val l = level.coerceIn(0, Config.Q_NAMES.size - 1)
+        AppState.quality = l
+        sendCtl(JSONObject().put("t", "q").put("v", l))
+        AppState.changed()
+    }
+
+    /** Sets the bitrate limits and tells WebRTC to keep the motion smooth (it lowers sharpness first). */
     private fun tuneVideo() {
         if (role != Role.OWNER) return
+        val maxBr = Config.Q_MAX_BITRATE[AppState.quality.coerceIn(0, Config.Q_NAMES.size - 1)]
         try {
             val s = videoSender
             if (s != null) {
                 val p = s.parameters
                 for (e in p.encodings) {
-                    e.maxBitrateBps = Config.MAX_BITRATE
+                    e.maxBitrateBps = maxBr
                     e.minBitrateBps = Config.MIN_BITRATE
                     e.maxFramerate = Config.FPS
                     e.scaleResolutionDownBy = 1.0
@@ -442,7 +477,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 s.setParameters(p)
             }
         } catch (_: Exception) {}
-        try { pc?.setBitrate(Config.MIN_BITRATE, Config.START_BITRATE, Config.MAX_BITRATE) } catch (_: Exception) {}
+        try { pc?.setBitrate(Config.MIN_BITRATE, maxBr / 2, maxBr) } catch (_: Exception) {}
     }
 
     // ---------------------------------------------------------------- actions
@@ -456,7 +491,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
             override fun run() {
                 if (closed) return
                 pollNet()
-                main.postDelayed(this, 3000L)
+                main.postDelayed(this, 2000L)
             }
         }
         netPoll = r
@@ -474,13 +509,35 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 if (pair == null) {
                     pair = map.values.firstOrNull { it.type == "candidate-pair" && it.members["nominated"] == true && it.members["state"] == "succeeded" }
                 }
+                var link = ""
                 if (pair != null) {
-                    val lt = map[pair.members["localCandidateId"] as? String ?: ""]?.members?.get("candidateType") as? String
+                    val lc = map[pair.members["localCandidateId"] as? String ?: ""]
+                    val lt = lc?.members?.get("candidateType") as? String
                     val rt = map[pair.members["remoteCandidateId"] as? String ?: ""]?.members?.get("candidateType") as? String
                     val rtt = (pair.members["currentRoundTripTime"] as? Number)?.toDouble()
-                    val kind = if (lt == "relay" || rt == "relay") "Relay" else "Direct"
-                    text = if (rtt != null) "$kind ${(rtt * 1000).toInt()} ms" else kind
+                    val relay = lt == "relay" || rt == "relay"
+                    val proto = (lc?.members?.get("relayProtocol") as? String) ?: (lc?.members?.get("protocol") as? String) ?: ""
+                    link = (if (relay) "Relay" else "Direct") + (if (relay && proto.isNotEmpty()) "/$proto" else "")
+                    if (rtt != null) link += " ${(rtt * 1000).toInt()} ms"
                 }
+                // picture: frames per second and size actually received
+                var pic = ""
+                val inb = map.values.firstOrNull { it.type == "inbound-rtp" && (it.members["kind"] == "video" || it.members["mediaType"] == "video") }
+                if (inb != null) {
+                    val frames = (inb.members["framesDecoded"] as? Number)?.toDouble()
+                    val now = System.currentTimeMillis()
+                    var fps = -1
+                    if (frames != null) {
+                        if (lastFrames >= 0 && now > lastFramesT) fps = Math.round((frames - lastFrames) * 1000.0 / (now - lastFramesT)).toInt()
+                        lastFrames = frames
+                        lastFramesT = now
+                    }
+                    val w = (inb.members["frameWidth"] as? Number)?.toInt()
+                    val h = (inb.members["frameHeight"] as? Number)?.toInt()
+                    if (fps >= 0) pic += " · $fps fps"
+                    if (w != null && h != null && w > 0) pic += " · ${minOf(w, h)}p"
+                }
+                text = link + pic
             } catch (_: Exception) {
             }
             if (text.isNotEmpty()) {
@@ -522,6 +579,12 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     fun setMic(on: Boolean) {
         AppState.micMuted = !on
         audioTrack?.setEnabled(on)
+        AppState.changed()
+    }
+
+    fun setSpeaker(on: Boolean) {
+        AppState.speakerMuted = !on
+        remoteAudio?.setEnabled(on)
         AppState.changed()
     }
 

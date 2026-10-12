@@ -26,8 +26,6 @@ object Rtc {
         val app = ctx.applicationContext
         PeerConnectionFactory.initialize(
             PeerConnectionFactory.InitializationOptions.builder(app)
-                // Ask for zero buffering delay on the receiving side: the picture is shown as soon as it arrives.
-                .setFieldTrials("WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:0/")
                 .createInitializationOptions()
         )
         egl = EglBase.create()

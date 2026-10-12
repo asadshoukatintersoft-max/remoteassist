@@ -38,14 +38,16 @@ object Config {
      */
     const val TURN_API_URL = ""
 
-    // ---- Video quality (raise for sharper, lower for slower networks / weaker phones)
-    const val MAX_SHORT_SIDE = 720       // pixels on the short side of the shared screen (720 = smooth)
+    // ---- Video quality. The helper can switch between three levels with one button during a session.
+    //      Levels:            Fast     Normal     Sharp
+    val Q_NAMES = listOf("Fast", "Normal", "Sharp")
+    val Q_SHORT_SIDE = intArrayOf(540, 720, 1080)           // pixels on the short side of the shared screen
+    val Q_MAX_BITRATE = intArrayOf(1_200_000, 2_500_000, 5_000_000)
+    const val DEFAULT_QUALITY = 1
     const val FPS = 30
-    const val START_BITRATE = 1_500_000  // bits per second at start
-    const val MIN_BITRATE = 300_000
-    const val MAX_BITRATE = 3_000_000
-    /** Hardware H.264 is much faster than the default software VP8 on most phones. */
-    const val PREFER_H264 = true
+    const val MIN_BITRATE = 100_000
+    /** VP8 works smoothly on every phone. Hardware H.264 can stutter on some phones, so it is off. */
+    const val PREFER_H264 = false
 
     /** Digits in the session code. 4 is easy to read out; 6 is safer. */
     const val CODE_LENGTH = 4

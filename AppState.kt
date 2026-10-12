@@ -24,6 +24,8 @@ object AppState {
     @Volatile var controlGranted = false
     @Volatile var controlRequested = false
     @Volatile var micMuted = false
+    @Volatile var speakerMuted = false
+    @Volatile var quality = Config.DEFAULT_QUALITY
     @Volatile var net: String = ""
     @Volatile var session: Session? = null
 
@@ -42,6 +44,8 @@ object AppState {
         controlGranted = false
         controlRequested = false
         micMuted = false
+        speakerMuted = false
+        quality = Config.DEFAULT_QUALITY
         net = ""
         session = null
         changed()
