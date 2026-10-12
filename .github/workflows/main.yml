@@ -26,6 +26,9 @@ jobs:
           mv accessibility_config.xml app/src/main/res/xml/
           mv strings.xml app/src/main/res/values/
           mv ic_launcher.xml ic_stat.xml app/src/main/res/drawable/
+          for f in ic_launcher_fg.xml ic_launcher_bg.xml; do
+            [ -f "$f" ] && mv "$f" app/src/main/res/drawable/
+          done
           mv proguard-rules.pro app/
           for f in build.gradle*.kts; do
             if grep -q namespace "$f"; then mv "$f" app/build.gradle.kts; else mv "$f" root-build.tmp; fi
@@ -55,12 +58,21 @@ jobs:
         with:
           gradle-version: 8.10.2
 
+      - name: Restore saved signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/ra-keystore
+          key: ra-keystore-v1
+
       - name: Prepare signing key
         run: |
-          keytool -genkeypair -keystore "$RUNNER_TEMP/release.jks" -alias release \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass remoteassist-ks -keypass remoteassist-ks -dname "CN=RemoteAssist"
-          echo "KS_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/ra-keystore"
+          if [ ! -f "$HOME/ra-keystore/release.jks" ]; then
+            keytool -genkeypair -keystore "$HOME/ra-keystore/release.jks" -alias release \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass remoteassist-ks -keypass remoteassist-ks -dname "CN=RemoteAssist"
+          fi
+          echo "KS_PATH=$HOME/ra-keystore/release.jks" >> "$GITHUB_ENV"
           echo "KS_PASS=remoteassist-ks" >> "$GITHUB_ENV"
           echo "KS_ALIAS=release" >> "$GITHUB_ENV"
 
