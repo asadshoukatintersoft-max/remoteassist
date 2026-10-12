@@ -1,0 +1,86 @@
+name: UI check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  shots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Get latest APK and test script
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo ${{ github.repository }} --pattern RemoteAssist.apk --clobber
+          cat > ui.sh <<'EOS'
+          set -x
+          P=com.remoteassist.fyp
+          mkdir -p out
+          shot() { adb exec-out screencap -p > out/$1.png; }
+          tapt() {
+            adb shell uiautomator dump /sdcard/u.xml >/dev/null 2>&1
+            adb pull /sdcard/u.xml u.xml >/dev/null 2>&1
+            python3 - "$@" <<'PY'
+          import sys, re, subprocess
+          import xml.etree.ElementTree as ET
+          words = [w.lower() for w in sys.argv[1:]]
+          for w in words:
+              for n in ET.parse('u.xml').iter('node'):
+                  s = ((n.get('text') or '') + ' ' + (n.get('content-desc') or '')).lower()
+                  if w in s and n.get('bounds'):
+                      a = list(map(int, re.findall(r'\d+', n.get('bounds'))))
+                      subprocess.call(['adb', 'shell', 'input', 'tap', str((a[0]+a[2])//2), str((a[1]+a[3])//2)])
+                      sys.exit(0)
+          print('NOTFOUND', words)
+          PY
+          }
+          launch() { adb shell am force-stop $P; adb shell am start -n $P/.MainActivity; sleep 4; }
+          adb install -r RemoteAssist.apk
+          adb shell pm grant $P android.permission.RECORD_AUDIO
+          adb shell pm grant $P android.permission.POST_NOTIFICATIONS
+          adb shell cmd uimode night no
+          launch; shot 01_home_light
+          tapt "settings"; sleep 2; shot 02_settings_light
+          adb shell input keyevent 4; sleep 1
+          tapt "dark theme"; sleep 2; shot 03_home_dark_after_toggle
+          tapt "settings"; sleep 2; shot 04_settings_dark
+          adb shell input keyevent 4; sleep 1
+          tapt "join"; sleep 2; shot 05_join_dark
+          adb shell input keyevent 4; sleep 1
+          tapt "i need help"; sleep 3
+          for i in 1 2 3 4; do tapt "skip (view only)" "start now" "share screen" "entire screen" ; sleep 3; done
+          sleep 8; shot 06_owner_code_dark
+          adb shell cmd locale set-app-locales $P --locales ur
+          launch; shot 07_home_urdu
+          tapt "ترتیبات"; sleep 2; shot 08_settings_urdu
+          adb shell cmd locale set-app-locales $P --locales ar
+          launch; shot 09_home_arabic
+          EOS
+
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash ui.sh
+
+      - name: Publish screenshots
+        if: always()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ui-check
+          name: UI check screenshots
+          prerelease: true
+          make_latest: false
+          files: out/*.png
