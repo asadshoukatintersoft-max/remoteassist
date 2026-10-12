@@ -474,7 +474,7 @@ class MainActivity : Activity() {
             }
             Phase.WAITING_FOR_HELPER -> {
                 c.addView(text("Your session code", 22f, true, BLUE))
-                c.addView(text(spaced(AppState.code), 56f, true, 0xFF000000.toInt(), center = true))
+                c.addView(text(spaced(AppState.code), 56f, true, center = true))
                 c.addView(text(tr("Tell this code to your helper. They open Remote Assist, tap \"Join\" and type it in.\n\nOnly share it with someone you trust. It expires in {0} minutes.", Config.CODE_VALID_MIN)))
                 c.addView(button("Send code", BLUE) {
                     val i = Intent(Intent.ACTION_SEND)
@@ -650,7 +650,10 @@ class MainActivity : Activity() {
         addIcon(r1, SpeakerDrawable(dp(24), AppState.speakerMuted, RED), if (AppState.speakerMuted) RED else GREY,
             if (AppState.speakerMuted) "Unmute speaker" else "Mute speaker") { AppState.session?.setSpeaker(AppState.speakerMuted) }
         if (Config.CONTROL_ENABLED) {
-            if (AppState.controlGranted) add(r1, "Home", BLUE) { navKey("home") }
+            if (AppState.controlGranted) {
+                add(r1, "Back", BLUE) { navKey("back") }
+                add(r1, "Home", BLUE) { navKey("home") }
+            }
             else add(r1, "Ask control", BLUE) { AppState.session?.requestControl() }
         }
         if (Config.CONTROL_ENABLED && AppState.controlGranted) {
