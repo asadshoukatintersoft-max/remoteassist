@@ -63,6 +63,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     private var netPoll: Runnable? = null
     private var remoteAudio: AudioTrack? = null
     private var ownerPoll: Runnable? = null
+    private var devRunnable: Runnable? = null
     private var scaleStep = 0
     private var lowCount = 0
     private var highCount = 0
@@ -381,6 +382,12 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
                 AppState.changed()
             }
             "q" -> if (role == Role.OWNER) applyQuality(j.optInt("v", Config.DEFAULT_QUALITY))
+            "devreq" -> if (role == Role.OWNER) setDeviceStream(j.optBoolean("on"))
+            "dev" -> if (role == Role.HELPER) {
+                AppState.device = j
+                AppState.deviceAt = System.currentTimeMillis()
+                AppState.changed()
+            }
             "req" -> if (role == Role.OWNER) {
                 AppState.controlRequested = true
                 AppState.changed()
@@ -635,7 +642,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     fun setControl(on: Boolean) {
         AppState.controlGranted = on
         AppState.controlRequested = false
-        if (!on) ControlService.instance?.touchCancel()
+        if (!on) { ControlService.instance?.touchCancel(); setDeviceStream(false) }
         sendCtl(JSONObject().put("t", "grant").put("on", on))
         AppState.changed()
     }
@@ -650,6 +657,31 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
     fun setMic(on: Boolean) {
         AppState.micMuted = !on
         audioTrack?.setEnabled(on)
+        AppState.changed()
+    }
+
+    /** Helper: ask the other phone to start/stop sending live phone details (only works while it has given control). */
+    fun requestDevice(on: Boolean) {
+        sendCtl(JSONObject().put("t", "devreq").put("on", on))
+    }
+
+    /** Owner: send a fresh set of phone details every 2 seconds while the helper has the panel open. */
+    private fun setDeviceStream(on: Boolean) {
+        devRunnable?.let { main.removeCallbacks(it) }
+        devRunnable = null
+        val go = on && AppState.controlGranted && !closed
+        AppState.deviceStreaming = go
+        if (go) {
+            val r = object : Runnable {
+                override fun run() {
+                    if (closed || !AppState.controlGranted) { setDeviceStream(false); return }
+                    sendCtl(DeviceInfo.collect(ctx))
+                    main.postDelayed(this, 2000L)
+                }
+            }
+            devRunnable = r
+            main.post(r)
+        }
         AppState.changed()
     }
 
@@ -703,6 +735,7 @@ class Session(private val ctx: Context, val role: Role, val code: String) {
         lostTimeout?.let { main.removeCallbacks(it) }
         netPoll?.let { main.removeCallbacks(it) }
         ownerPoll?.let { main.removeCallbacks(it) }
+        devRunnable?.let { main.removeCallbacks(it) }
         useSpeaker(false)
         try { signaling?.stop() } catch (_: Exception) {}
         try { setSink(null) } catch (_: Exception) {}

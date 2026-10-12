@@ -155,13 +155,13 @@ class ShareService : Service() {
         val text: String
         when (AppState.phase) {
             Phase.LIVE -> {
-                title = if (owner) "Sharing your screen" else "Connected to a session"
-                text = if (owner && AppState.controlGranted) "Your helper has control. Tap to open."
-                else "Tap to open Remote Assist."
+                title = if (owner) Lang.tr("Sharing your screen") else Lang.tr("Connected to a session")
+                text = if (owner && AppState.controlGranted) Lang.tr("Your helper has control. Tap to open.")
+                else Lang.tr("Tap to open Remote Assist.")
             }
-            Phase.WAITING_FOR_HELPER -> { title = "Waiting for your helper"; text = "Code: " + AppState.code.chunked(4).joinToString(" ") }
-            Phase.WAITING_APPROVAL -> { title = "Someone joined"; text = "Open the app to allow or decline." }
-            else -> { title = "Remote Assist"; text = "Connecting…" }
+            Phase.WAITING_FOR_HELPER -> { title = Lang.tr("Waiting for your helper"); text = Lang.tr("Code: ") + AppState.code.chunked(4).joinToString(" ") }
+            Phase.WAITING_APPROVAL -> { title = Lang.tr("Someone joined"); text = Lang.tr("Open the app to allow or decline.") }
+            else -> { title = "Remote Assist"; text = Lang.tr("Connecting…") }
         }
         val icon = Icon.createWithResource(this, R.drawable.ic_stat)
         val b = Notification.Builder(this, "session")
@@ -171,9 +171,9 @@ class ShareService : Service() {
             .setContentIntent(open)
             .setOngoing(true)
         if (owner && AppState.controlGranted) {
-            b.addAction(Notification.Action.Builder(icon, "Take back control", pi("takeback")).build())
+            b.addAction(Notification.Action.Builder(icon, Lang.tr("Take back control"), pi("takeback")).build())
         }
-        b.addAction(Notification.Action.Builder(icon, "End session", pi("stop")).build())
+        b.addAction(Notification.Action.Builder(icon, Lang.tr("End session"), pi("stop")).build())
         return b.build()
     }
 }

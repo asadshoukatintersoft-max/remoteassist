@@ -2,6 +2,7 @@ package com.remoteassist.fyp
 
 import android.os.Handler
 import android.os.Looper
+import org.json.JSONObject
 import java.util.concurrent.CopyOnWriteArrayList
 
 enum class Role { OWNER, HELPER }
@@ -27,6 +28,9 @@ object AppState {
     @Volatile var speakerMuted = false
     @Volatile var quality = Config.DEFAULT_QUALITY
     @Volatile var net: String = ""
+    @Volatile var device: JSONObject? = null
+    @Volatile var deviceAt = 0L
+    @Volatile var deviceStreaming = false
     @Volatile var session: Session? = null
 
     val listeners = CopyOnWriteArrayList<() -> Unit>()
@@ -47,6 +51,9 @@ object AppState {
         speakerMuted = false
         quality = Config.DEFAULT_QUALITY
         net = ""
+        device = null
+        deviceAt = 0L
+        deviceStreaming = false
         session = null
         changed()
     }
