@@ -38,12 +38,12 @@ object Config {
      */
     const val TURN_API_URL = ""
 
-    // ---- Video quality. The helper can switch between three levels with one button during a session.
+    // ---- Video quality. Level 2 (Sharp) is always used; the lower levels are kept only for experiments.
     //      Levels:            Fast     Normal     Sharp
     val Q_NAMES = listOf("Fast", "Normal", "Sharp")
     val Q_SHORT_SIDE = intArrayOf(540, 720, 1080)           // pixels on the short side of the shared screen
-    val Q_MAX_BITRATE = intArrayOf(1_200_000, 2_500_000, 5_000_000)
-    const val DEFAULT_QUALITY = 1
+    val Q_MAX_BITRATE = intArrayOf(1_200_000, 2_500_000, 4_000_000)
+    const val DEFAULT_QUALITY = 2   // full-HD: the best picture; WebRTC lowers it automatically if the network or phone cannot keep up
     const val FPS = 30
     const val MIN_BITRATE = 100_000
     /** VP8 works smoothly on every phone. Hardware H.264 can stutter on some phones, so it is off. */

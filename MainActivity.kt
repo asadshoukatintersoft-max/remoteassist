@@ -379,7 +379,7 @@ class MainActivity : Activity() {
                 }
                 }
                 c.addView(audioRow())
-                c.addView(button("Stop sharing", RED) { AppState.session?.end("You stopped sharing.") })
+                c.addView(button("Stop sharing", RED) { confirmEnd("You stopped sharing.") })
             }
         }
         return scroll(c)
@@ -506,30 +506,27 @@ class MainActivity : Activity() {
             lp.setMargins(dp(2), dp(2), dp(2), dp(2))
             row.addView(b, lp)
         }
-        // Row 1: microphone, speaker, picture quality, end
+        // One single row: microphone, speaker, Home (or "Ask control"), End
         val r1 = newRow()
         addIcon(r1, MicDrawable(dp(24), AppState.micMuted, RED), if (AppState.micMuted) RED else GREY,
             if (AppState.micMuted) "Unmute microphone" else "Mute microphone") { AppState.session?.setMic(AppState.micMuted) }
         addIcon(r1, SpeakerDrawable(dp(24), AppState.speakerMuted, RED), if (AppState.speakerMuted) RED else GREY,
             if (AppState.speakerMuted) "Unmute speaker" else "Mute speaker") { AppState.session?.setSpeaker(AppState.speakerMuted) }
-        val q = AppState.quality.coerceIn(0, Config.Q_NAMES.size - 1)
-        add(r1, "Quality: ${Config.Q_NAMES[q]}", 0xFF5E35B1.toInt()) {
-            AppState.session?.setQuality((AppState.quality + 1) % Config.Q_NAMES.size)
-        }
-        add(r1, "End", RED) { AppState.session?.end("You left the session.") }
-        // Row 2: phone controls
         if (Config.CONTROL_ENABLED) {
-            val r2 = newRow()
-            if (AppState.controlGranted) {
-                add(r2, "Back", BLUE) { navKey("back") }
-                add(r2, "Home", BLUE) { navKey("home") }
-                add(r2, "Apps", BLUE) { navKey("recents") }
-                add(r2, "Panel", BLUE) { navKey("notif") }
-                add(r2, "Type", GREEN) { askTypeText() }
-            } else {
-                add(r2, "Ask for control", BLUE) { AppState.session?.requestControl() }
-            }
+            if (AppState.controlGranted) add(r1, "Home", BLUE) { navKey("home") }
+            else add(r1, "Ask control", BLUE) { AppState.session?.requestControl() }
         }
+        add(r1, "End", RED) { confirmEnd("You left the session.") }
+    }
+
+    /** Asks "are you sure?" so the session is never ended by an accidental tap. */
+    private fun confirmEnd(reason: String) {
+        AlertDialog.Builder(this)
+            .setTitle("End session?")
+            .setMessage("Do you really want to end this session?")
+            .setPositiveButton("Yes, end") { _, _ -> AppState.session?.end(reason) }
+            .setNegativeButton("No", null)
+            .show()
     }
 
     // ------------------------------------------------- helper: touch → phone
